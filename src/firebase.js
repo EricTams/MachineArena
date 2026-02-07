@@ -159,11 +159,12 @@ async function fetchFighterForStage(stageNum) {
             .where('levelNum', '==', stageNum)
             .get();
 
-        // Filter out own entries and entries without weights
-        const candidates = snapshot.docs.filter(doc => {
-            const d = doc.data();
-            return d.playerName !== playerName && !!d.weightsBase64;
-        });
+        // Filter to entries with weights, preferring other players
+        const withWeights = snapshot.docs.filter(doc => !!doc.data().weightsBase64);
+        const others = withWeights.filter(doc => doc.data().playerName !== playerName);
+
+        // AIDEV-NOTE: Fall back to own ships when no other opponents exist (solo testing)
+        const candidates = others.length > 0 ? others : withWeights;
 
         if (candidates.length === 0) return null;
 
