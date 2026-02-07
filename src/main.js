@@ -13,7 +13,7 @@ import { getLevelList } from './arena/levels.js';
 import { setShipLayout, getShipLayout, clearGridPieces, createPiecesFromLayout } from './layout.js';
 import { generateName, setPlayerName, getPlayerName, setShipName, getShipName, needsPlayerName } from './naming.js';
 import { saveShip, listSavedShips, loadSavedShip, deleteSavedShip } from './shipPersistence.js';
-import { importModelFromJson, exportModelAsJson, saveModelWeights, loadModelWeights } from './ml/model.js';
+import { importModelFromJson, exportModelAsJson, saveModelWeights, loadModelWeights, createModel, getDefaultConfig } from './ml/model.js';
 import { initFirebase, isOnline, uploadFighter, fetchFighters, fetchFighter } from './firebase.js';
 
 // Game state
@@ -40,6 +40,17 @@ function hideLandingScreen() {
     if (landingScreen) {
         landingScreen.classList.add('hidden');
         setTimeout(() => landingScreen.remove(), 400);
+    }
+}
+
+/**
+ * Dismisses the getting-started tips panel.
+ */
+function dismissTips() {
+    const panel = document.getElementById('tips-panel');
+    if (panel) {
+        panel.classList.add('hidden');
+        setTimeout(() => panel.remove(), 350);
     }
 }
 
@@ -284,6 +295,7 @@ async function init() {
         setupSaveShipButton();
         setupMyShipsDropdown();
         setupOpponentsDropdown();
+        setupTipsDismiss();
     });
     
     // All done - hide landing screen and start game
@@ -307,6 +319,14 @@ function setupArenaModeToggle() {
 }
 
 /**
+ * Sets up the dismiss button on the getting-started tips panel.
+ */
+function setupTipsDismiss() {
+    const btn = document.getElementById('tips-dismiss');
+    if (btn) btn.addEventListener('click', dismissTips);
+}
+
+/**
  * Sets up the copy layout button
  */
 function setupCopyLayoutButton() {
@@ -319,12 +339,17 @@ function setupCopyLayoutButton() {
 }
 
 /**
- * Sets up the FIGHT! button (main gameplay)
+ * Sets up the FIGHT! button and opponent picker dialog
  */
 function setupFightButton() {
     const btn = document.getElementById('fight-btn');
-    if (!btn) return;
-    btn.addEventListener('click', () => enterFight());
+    if (btn) btn.addEventListener('click', () => enterFight());
+
+    const cancelBtn = document.getElementById('fight-picker-cancel');
+    const dialog = document.getElementById('fight-picker-dialog');
+    if (cancelBtn && dialog) {
+        cancelBtn.addEventListener('click', () => dialog.classList.add('hidden'));
+    }
 }
 
 /**
@@ -966,8 +991,9 @@ function exitArenaMode() {
 
 /**
  * FIGHT! button -- enters arena with current level, auto-uploads on exit.
+ * If no level selected (Free Flight), prompts to pick a saved ship as opponent.
  */
-function enterFight() {
+async function enterFight() {
     if (isArenaActive()) {
         exitArenaMode();
         return;
@@ -978,33 +1004,172 @@ function enterFight() {
         return;
     }
 
+    // Level selected -- fight level enemies
+    if (gameState.selectedLevel > 0) {
+        startRankedArena();
+        return;
+    }
+
+    // No level -- pick a saved ship, or fall back to a random preset
+    const ships = await listSavedShips();
+    const opponents = ships.filter(s => s.hasWeights);
+
+    if (opponents.length > 0) {
+        showOpponentPicker(opponents);
+    } else {
+        fightRandomPreset();
+    }
+}
+
+/**
+ * Picks a random preset ship and fights it with a fresh (untrained) AI.
+ * Used as a fallback when no saved ships are available.
+ */
+function fightRandomPreset() {
+    const presetNames = Object.keys(SHIP_PRESETS);
+    const pick = presetNames[Math.floor(Math.random() * presetNames.length)];
+    const opponentLayout = SHIP_PRESETS[pick];
+    const opponentPieces = createPiecesFromLayout(opponentLayout);
+
+    if (opponentPieces.length === 0) {
+        console.error('Failed to create opponent from preset:', pick);
+        return;
+    }
+
+    // Fresh untrained model -- opponent will flail randomly
+    const config = getDefaultConfig();
+    const opponentModel = createModel(config);
+
+    const playerPieces = createPiecesFromLayout(getShipLayout());
+    if (playerPieces.length === 0) {
+        console.log('Place some pieces on the grid first');
+        opponentModel.dispose();
+        return;
+    }
+
     const scene = getScene();
     const camera = getCamera();
     const renderer = getRenderer();
-    const playerLayout = getShipLayout();
-    const playerPieces = createPiecesFromLayout(playerLayout);
 
-    let success;
+    const success = enterArenaWithOpponent(
+        playerPieces, opponentPieces, opponentModel,
+        scene, camera, renderer, screenToWorld
+    );
 
-    if (gameState.selectedLevel > 0) {
-        success = enterArenaLevel(
-            gameState.selectedLevel,
-            playerPieces,
-            scene, camera, renderer,
-            screenToWorld, getPresetPieces
-        );
+    if (success) {
+        arenaIsRankedFight = false; // No level = no upload
+        showDesignMode(false);
+        updateFightButtonText();
+        console.log(`Fighting random preset: ${pick} (untrained AI)`);
     } else {
-        success = enterArena(
-            playerPieces,
-            scene, camera, renderer,
-            screenToWorld
-        );
+        opponentModel.dispose();
     }
+}
+
+/**
+ * Enters a ranked arena fight against level enemies.
+ */
+function startRankedArena() {
+    const scene = getScene();
+    const camera = getCamera();
+    const renderer = getRenderer();
+    const playerPieces = createPiecesFromLayout(getShipLayout());
+
+    const success = enterArenaLevel(
+        gameState.selectedLevel,
+        playerPieces,
+        scene, camera, renderer,
+        screenToWorld, getPresetPieces
+    );
 
     if (success) {
         arenaIsRankedFight = true;
         showDesignMode(false);
         updateFightButtonText();
+    }
+}
+
+/**
+ * Shows a quick picker dialog to choose a saved ship as opponent for FIGHT.
+ * @param {Array} opponents - Saved ships that have trained weights
+ */
+function showOpponentPicker(opponents) {
+    // Reuse the save-ship-dialog structure for the picker
+    const dialog = document.getElementById('fight-picker-dialog');
+    if (!dialog) return;
+
+    const list = document.getElementById('fight-picker-list');
+    list.innerHTML = '';
+
+    for (const ship of opponents) {
+        const row = document.createElement('button');
+        row.className = 'ship-option';
+        row.textContent = ship.shipName;
+        row.addEventListener('click', async () => {
+            dialog.classList.add('hidden');
+            await startRankedFightAgainst(ship.id);
+        });
+        list.appendChild(row);
+    }
+
+    dialog.classList.remove('hidden');
+}
+
+/**
+ * Starts a ranked fight against a saved ship (auto-uploads on exit).
+ * @param {number} shipId - Saved ship record ID
+ */
+async function startRankedFightAgainst(shipId) {
+    const record = await loadSavedShip(shipId);
+    if (!record || !record.weightsBase64 || !record.topology) {
+        console.error('Ship has no trained weights to fight against');
+        return;
+    }
+
+    let opponentModel;
+    try {
+        const result = await importModelFromJson({
+            topology: record.topology,
+            weightSpecs: record.weightSpecs,
+            weightsBase64: record.weightsBase64,
+            config: record.modelConfig,
+            schemaVersion: record.schemaVersion
+        });
+        opponentModel = result.model;
+    } catch (err) {
+        console.error('Failed to load opponent model:', err.message);
+        return;
+    }
+
+    const playerPieces = createPiecesFromLayout(getShipLayout());
+    if (playerPieces.length === 0) {
+        console.log('Place some pieces on the grid first');
+        opponentModel.dispose();
+        return;
+    }
+
+    const opponentPieces = createPiecesFromLayout(record.layout);
+    if (opponentPieces.length === 0) {
+        console.error('Saved ship layout is empty');
+        opponentModel.dispose();
+        return;
+    }
+
+    const scene = getScene();
+    const camera = getCamera();
+    const renderer = getRenderer();
+
+    const success = enterArenaWithOpponent(
+        playerPieces, opponentPieces, opponentModel,
+        scene, camera, renderer, screenToWorld
+    );
+
+    if (success) {
+        arenaIsRankedFight = false; // No level = no upload key
+        showDesignMode(false);
+        updateFightButtonText();
+    } else {
+        opponentModel.dispose();
     }
 }
 
@@ -1076,9 +1241,10 @@ function showDesignMode(visible) {
         }
     }
     
-    // Hide stats panel when leaving design mode
+    // Hide stats panel and tips when leaving design mode (entering arena)
     if (!visible) {
         hideStats();
+        dismissTips();
     }
     
     // Hide/show design-only toolbar elements

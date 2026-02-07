@@ -315,7 +315,13 @@
             font-family: 'Segoe UI', sans-serif;
             font-size: 14px;
             color: #718096;
-            margin-bottom: 40px;
+            margin-bottom: 6px;
+        }
+        #landing-version {
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 11px;
+            color: #4a5568;
+            margin-bottom: 34px;
         }
         /* Callsign section */
         #landing-callsign-label,
@@ -441,7 +447,72 @@
             background: #5a6578;
         }
         
+        /* Getting Started tips panel */
+        #tips-panel {
+            position: fixed;
+            bottom: 16px;
+            left: 16px;
+            width: 280px;
+            background: rgba(26, 32, 44, 0.92);
+            border: 1px solid #4a5568;
+            border-radius: 8px;
+            padding: 16px 18px;
+            z-index: 800;
+            font-family: 'Segoe UI', sans-serif;
+            color: #cbd5e0;
+            transition: opacity 0.3s ease-out, transform 0.3s ease-out;
+        }
+        #tips-panel.hidden {
+            opacity: 0;
+            transform: translateY(12px);
+            pointer-events: none;
+        }
+        #tips-panel h4 {
+            margin: 0 0 10px 0;
+            font-size: 14px;
+            color: #ffcc00;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+        #tips-panel ol {
+            margin: 0;
+            padding-left: 20px;
+            line-height: 1.7;
+            font-size: 13px;
+        }
+        #tips-panel li {
+            margin-bottom: 2px;
+        }
+        #tips-panel kbd {
+            display: inline-block;
+            background: #2d3748;
+            border: 1px solid #4a5568;
+            border-radius: 3px;
+            padding: 0 5px;
+            font-family: 'Consolas', monospace;
+            font-size: 12px;
+            color: #e2e8f0;
+        }
+        #tips-panel .highlight {
+            color: #ffcc00;
+            font-weight: 600;
+        }
+        #tips-dismiss {
+            background: none;
+            border: none;
+            color: #718096;
+            cursor: pointer;
+            font-size: 16px;
+            padding: 0 2px;
+            line-height: 1;
+        }
+        #tips-dismiss:hover {
+            color: #e2e8f0;
+        }
+
         /* Save Ship Dialog */
+        #fight-picker-dialog,
         #save-ship-dialog {
             position: fixed;
             top: 0;
@@ -455,6 +526,7 @@
             z-index: 2000;
             transition: opacity 0.2s ease-out;
         }
+        #fight-picker-dialog.hidden,
         #save-ship-dialog.hidden {
             display: none;
         }
@@ -492,6 +564,27 @@
             gap: 8px;
         }
         
+        /* Ship option buttons in picker dialogs */
+        .ship-option {
+            display: block;
+            width: 100%;
+            padding: 10px 14px;
+            margin-bottom: 4px;
+            background: #1a202c;
+            color: #e2e8f0;
+            border: 1px solid #4a5568;
+            border-radius: 4px;
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 14px;
+            text-align: left;
+            cursor: pointer;
+        }
+        .ship-option:hover {
+            background: #2a4365;
+            border-color: #ffcc00;
+            color: #ffcc00;
+        }
+
         /* My Ships dropdown items with fight button */
         .my-ship-item {
             display: flex;
@@ -613,6 +706,17 @@
     </style>
 </head>
 <body>
+    <!-- Fight Opponent Picker -->
+    <div id="fight-picker-dialog" class="hidden">
+        <div class="save-dialog-box">
+            <h3>Choose Opponent</h3>
+            <div id="fight-picker-list" style="max-height: 240px; overflow-y: auto;"></div>
+            <div class="save-dialog-buttons" style="margin-top: 12px;">
+                <button class="name-btn reroll" id="fight-picker-cancel">Cancel</button>
+            </div>
+        </div>
+    </div>
+    
     <!-- Save Ship Dialog -->
     <div id="save-ship-dialog" class="hidden">
         <div class="save-dialog-box">
@@ -629,6 +733,7 @@
     <div id="landing-screen">
         <div id="landing-title">Machine Arena</div>
         <div id="landing-subtitle">Design. Train. Fight.</div>
+        <div id="landing-version">v0.1 &mdash; Feb 6, 2026 6:49 PM</div>
         
         <div id="landing-callsign-label">Pilot Name</div>
         <input type="text" id="landing-player-name" placeholder="Enter your name..." maxlength="40" />
@@ -653,6 +758,22 @@
     </div>
     
     <canvas id="game-canvas"></canvas>
+    
+    <!-- Getting Started tips (shown until first fight or dismissed) -->
+    <div id="tips-panel">
+        <h4>
+            Getting Started
+            <button id="tips-dismiss" title="Dismiss">&times;</button>
+        </h4>
+        <ol>
+            <li>Drag parts from the <span class="highlight">left panel</span> onto your ship</li>
+            <li>Pick a level from the <span class="highlight">top-right dropdown</span></li>
+            <li>Hit <span class="highlight">FIGHT!</span> to enter the arena</li>
+            <li>Your ship's AI trains as it fights &mdash; the more rounds, the smarter it gets</li>
+            <li>Press <kbd>T</kbd> to exit the arena</li>
+            <li>Use <span class="highlight">Save Ship</span> to keep your design &amp; trained AI</li>
+        </ol>
+    </div>
     
     <!-- Main toolbar (gameplay) -->
     <div id="toolbar">
