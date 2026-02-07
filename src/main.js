@@ -277,6 +277,7 @@ async function init() {
         
         // Setup UI buttons
         setupCopyLayoutButton();
+        setupFightButton();
         setupTestArenaButton();
         setupShipSelector();
         setupLevelSelector();
@@ -294,15 +295,13 @@ async function init() {
 }
 
 /**
- * Sets up the T key to toggle arena mode
+ * Sets up the T key to exit arena mode (only exits, doesn't enter)
  */
 function setupArenaModeToggle() {
     window.addEventListener('keydown', (e) => {
         if (e.key === 't' || e.key === 'T') {
-            // Ignore if typing in input
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-            
-            toggleArenaMode();
+            if (isArenaActive()) exitArenaMode();
         }
     });
 }
@@ -320,26 +319,21 @@ function setupCopyLayoutButton() {
 }
 
 /**
- * Sets up the test arena button
+ * Sets up the FIGHT! button (main gameplay)
+ */
+function setupFightButton() {
+    const btn = document.getElementById('fight-btn');
+    if (!btn) return;
+    btn.addEventListener('click', () => enterFight());
+}
+
+/**
+ * Sets up the Test Arena button (dev/sandbox)
  */
 function setupTestArenaButton() {
     const btn = document.getElementById('test-arena-btn');
     if (!btn) return;
-    
-    btn.addEventListener('click', () => {
-        toggleArenaMode();
-        // Update button text based on mode
-        updateArenaButtonText();
-    });
-}
-
-/**
- * Updates the arena button text based on current mode
- */
-function updateArenaButtonText() {
-    const btn = document.getElementById('test-arena-btn');
-    if (!btn) return;
-    btn.textContent = isArenaActive() ? 'Exit Arena' : 'Test Arena';
+    btn.addEventListener('click', () => enterTestArena());
 }
 
 /**
@@ -704,8 +698,9 @@ async function fightAgainstOnlineOpponent(docId) {
     );
 
     if (success) {
+        arenaIsRankedFight = false;
         showDesignMode(false);
-        updateArenaButtonText();
+        updateFightButtonText();
     } else {
         opponentModel.dispose();
     }
@@ -849,8 +844,9 @@ async function fightAgainstSavedShip(shipId) {
     );
 
     if (success) {
+        arenaIsRankedFight = false;
         showDesignMode(false);
-        updateArenaButtonText();
+        updateFightButtonText();
     } else {
         opponentModel.dispose();
     }
@@ -948,62 +944,112 @@ function copyShipLayoutToClipboard() {
     });
 }
 
+// Track whether current arena session should auto-upload on exit
+let arenaIsRankedFight = false;
+
 /**
- * Toggles between design mode and arena mode
+ * Exits arena mode and returns to design.
+ * Auto-uploads only if this was a ranked fight (not a test).
  */
-function toggleArenaMode() {
-    if (isArenaActive()) {
-        // Auto-upload fighter data before exiting (fire-and-forget)
+function exitArenaMode() {
+    if (!isArenaActive()) return;
+
+    if (arenaIsRankedFight) {
         autoUploadFighter();
-        
-        // Exit arena, return to design
-        exitArena();
-        showDesignMode(true);
-        updateArenaButtonText();
-    } else {
-        // Enter arena with current grid pieces
-        const scene = getScene();
-        const camera = getCamera();
-        const renderer = getRenderer();
-        
-        if (gameState.gridPieces.length === 0) {
-            console.log('Place some pieces on the grid first! (Need at least a Core)');
-            return;
-        }
-        
-        // Create player pieces from layout (single path for all ship creation)
-        const playerLayout = getShipLayout();
-        const playerPieces = createPiecesFromLayout(playerLayout);
-        
-        let success;
-        
-        if (gameState.selectedLevel > 0) {
-            // Enter level-based arena
-            success = enterArenaLevel(
-                gameState.selectedLevel,
-                playerPieces,
-                scene,
-                camera,
-                renderer,
-                screenToWorld,
-                getPresetPieces
-            );
-        } else {
-            // Enter free flight mode (no enemies)
-            success = enterArena(
-                playerPieces,
-                scene,
-                camera,
-                renderer,
-                screenToWorld
-            );
-        }
-        
-        if (success) {
-            showDesignMode(false);
-            updateArenaButtonText();
-        }
     }
+    arenaIsRankedFight = false;
+
+    exitArena();
+    showDesignMode(true);
+    updateFightButtonText();
+}
+
+/**
+ * FIGHT! button -- enters arena with current level, auto-uploads on exit.
+ */
+function enterFight() {
+    if (isArenaActive()) {
+        exitArenaMode();
+        return;
+    }
+
+    if (gameState.gridPieces.length === 0) {
+        console.log('Place some pieces on the grid first! (Need at least a Core)');
+        return;
+    }
+
+    const scene = getScene();
+    const camera = getCamera();
+    const renderer = getRenderer();
+    const playerLayout = getShipLayout();
+    const playerPieces = createPiecesFromLayout(playerLayout);
+
+    let success;
+
+    if (gameState.selectedLevel > 0) {
+        success = enterArenaLevel(
+            gameState.selectedLevel,
+            playerPieces,
+            scene, camera, renderer,
+            screenToWorld, getPresetPieces
+        );
+    } else {
+        success = enterArena(
+            playerPieces,
+            scene, camera, renderer,
+            screenToWorld
+        );
+    }
+
+    if (success) {
+        arenaIsRankedFight = true;
+        showDesignMode(false);
+        updateFightButtonText();
+    }
+}
+
+/**
+ * Test Arena button -- enters free flight (no enemies), no auto-upload.
+ * Sandbox for testing ship movement and controls.
+ */
+function enterTestArena() {
+    if (isArenaActive()) {
+        exitArenaMode();
+        return;
+    }
+
+    if (gameState.gridPieces.length === 0) {
+        console.log('Place some pieces on the grid first! (Need at least a Core)');
+        return;
+    }
+
+    const scene = getScene();
+    const camera = getCamera();
+    const renderer = getRenderer();
+    const playerLayout = getShipLayout();
+    const playerPieces = createPiecesFromLayout(playerLayout);
+
+    const success = enterArena(
+        playerPieces,
+        scene, camera, renderer,
+        screenToWorld
+    );
+
+    if (success) {
+        arenaIsRankedFight = false;
+        showDesignMode(false);
+        updateFightButtonText();
+    }
+}
+
+/**
+ * Updates the FIGHT button text based on current mode
+ */
+function updateFightButtonText() {
+    const fightBtn = document.getElementById('fight-btn');
+    const testBtn = document.getElementById('test-arena-btn');
+    if (fightBtn) fightBtn.textContent = isArenaActive() ? 'Exit' : 'FIGHT!';
+    if (testBtn) testBtn.textContent = isArenaActive() ? 'Exit' : 'Test Arena';
 }
 
 /**
