@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Machine Arena - Ship Designer</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            overflow: hidden;
+            background: #1a1a2e;
+        }
+        #game-canvas {
+            display: block;
+        }
+        /* Top toolbar */
+        #toolbar {
+            position: fixed;
+            top: 10px;
+            right: 10px;
+            display: flex;
+            gap: 8px;
+            z-index: 100;
+        }
+        .toolbar-btn {
+            padding: 8px 16px;
+            background: #4a5568;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: sans-serif;
+            font-size: 14px;
+        }
+        .toolbar-btn:hover {
+            background: #5a6578;
+        }
+        .toolbar-btn:active {
+            background: #3a4558;
+        }
+        .toolbar-btn.primary {
+            background: #38a169;
+        }
+        .toolbar-btn.primary:hover {
+            background: #48b179;
+        }
+        .toolbar-btn.primary:active {
+            background: #2f8a5a;
+        }
+        
+        /* Ship selector dropdown */
+        .ship-selector {
+            position: relative;
+        }
+        .ship-selector-btn {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .ship-selector-btn::after {
+            content: '';
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-top: 5px solid currentColor;
+        }
+        .ship-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            margin-top: 4px;
+            background: #2d3748;
+            border: 1px solid #4a5568;
+            border-radius: 4px;
+            min-width: 160px;
+            display: none;
+            overflow: hidden;
+        }
+        .ship-dropdown.open {
+            display: block;
+        }
+        .ship-option {
+            padding: 10px 14px;
+            cursor: pointer;
+            font-family: sans-serif;
+            font-size: 14px;
+            color: #e2e8f0;
+            border: none;
+            background: none;
+            width: 100%;
+            text-align: left;
+        }
+        .ship-option:hover {
+            background: #4a5568;
+        }
+        
+        /* Level selector dropdown */
+        .level-selector {
+            position: relative;
+        }
+        .level-selector-btn {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .level-selector-btn::after {
+            content: '';
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-top: 5px solid currentColor;
+        }
+        .level-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            margin-top: 4px;
+            background: #2d3748;
+            border: 1px solid #4a5568;
+            border-radius: 4px;
+            min-width: 180px;
+            display: none;
+            overflow: hidden;
+        }
+        .level-dropdown.open {
+            display: block;
+        }
+        .level-option {
+            padding: 10px 14px;
+            cursor: pointer;
+            font-family: sans-serif;
+            font-size: 14px;
+            color: #e2e8f0;
+            border: none;
+            background: none;
+            width: 100%;
+            text-align: left;
+        }
+        .level-option:hover {
+            background: #4a5568;
+        }
+        
+        /* Stats Panel */
+        #stats-panel {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            min-width: 180px;
+            background: rgba(30, 30, 50, 0.95);
+            border: 1px solid #4a5568;
+            border-radius: 6px;
+            padding: 12px;
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 13px;
+            color: #e2e8f0;
+            z-index: 100;
+            display: none;
+        }
+        #stats-panel.visible {
+            display: block;
+        }
+        #stats-panel h3 {
+            margin: 0 0 8px 0;
+            font-size: 15px;
+            color: #ffcc00;
+            border-bottom: 1px solid #4a5568;
+            padding-bottom: 6px;
+        }
+        #stats-panel .stat-row {
+            display: flex;
+            justify-content: space-between;
+            margin: 4px 0;
+        }
+        #stats-panel .stat-label {
+            color: #a0aec0;
+        }
+        #stats-panel .stat-value {
+            color: #fff;
+            font-weight: 500;
+        }
+        #stats-panel .stat-section {
+            margin-top: 8px;
+            padding-top: 8px;
+            border-top: 1px solid #3a4558;
+        }
+        #stats-panel .stat-section-title {
+            font-size: 11px;
+            text-transform: uppercase;
+            color: #718096;
+            margin-bottom: 4px;
+        }
+        
+        /* Arena Controls Panel */
+        #arena-controls-panel {
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            background: rgba(30, 30, 50, 0.95);
+            border: 1px solid #4a5568;
+            border-radius: 6px;
+            padding: 12px;
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 12px;
+            color: #e2e8f0;
+            z-index: 100;
+            display: none;
+        }
+        #arena-controls-panel.visible {
+            display: block;
+        }
+        #arena-controls-panel h4 {
+            margin: 0 0 8px 0;
+            font-size: 13px;
+            color: #ffcc00;
+            border-bottom: 1px solid #4a5568;
+            padding-bottom: 6px;
+        }
+        .controls-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+        }
+        .controls-section {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .controls-section-title {
+            font-size: 10px;
+            text-transform: uppercase;
+            color: #718096;
+            margin-bottom: 2px;
+        }
+        .control-row {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .control-name {
+            color: #a0aec0;
+            min-width: 50px;
+        }
+        .control-key {
+            display: inline-block;
+            padding: 2px 6px;
+            background: #2d3748;
+            border: 1px solid #4a5568;
+            border-radius: 3px;
+            font-family: monospace;
+            font-size: 11px;
+            color: #a0aec0;
+            min-width: 24px;
+            text-align: center;
+        }
+        .control-key.active {
+            background: #48bb78;
+            border-color: #68d391;
+            color: #1a202c;
+        }
+        
+        /* Loading Screen */
+        #loading-screen {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: #1a1a2e;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            transition: opacity 0.3s ease-out;
+        }
+        #loading-screen.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+        #loading-title {
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 24px;
+            color: #ffcc00;
+            margin-bottom: 24px;
+        }
+        #loading-bar-container {
+            width: 300px;
+            height: 8px;
+            background: #2a2a4e;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        #loading-bar {
+            width: 0%;
+            height: 100%;
+            background: linear-gradient(90deg, #ffcc00, #ff9900);
+            border-radius: 4px;
+            transition: width 0.15s ease-out;
+        }
+        #loading-status {
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 13px;
+            color: #a0aec0;
+            margin-top: 12px;
+        }
+    </style>
+</head>
+<body>
+    <!-- Loading Screen -->
+    <div id="loading-screen">
+        <div id="loading-title">Machine Arena</div>
+        <div id="loading-bar-container">
+            <div id="loading-bar"></div>
+        </div>
+        <div id="loading-status">Initializing...</div>
+    </div>
+    
+    <canvas id="game-canvas"></canvas>
+    
+    <!-- Top toolbar -->
+    <div id="toolbar">
+        <div class="ship-selector">
+            <button class="toolbar-btn ship-selector-btn" id="ship-selector-btn">Load Ship</button>
+            <div class="ship-dropdown" id="ship-dropdown">
+                <button class="ship-option" data-ship="starter">Starter</button>
+                <button class="ship-option" data-ship="gunboat">Gunboat</button>
+                <button class="ship-option" data-ship="speeder">Speeder</button>
+                <button class="ship-option" data-ship="tank">Tank</button>
+            </div>
+        </div>
+        <div class="level-selector">
+            <button class="toolbar-btn level-selector-btn" id="level-selector-btn">Free Flight</button>
+            <div class="level-dropdown" id="level-dropdown">
+                <button class="level-option" data-level="0">Free Flight</button>
+                <button class="level-option" data-level="1">Level 1: Speeder</button>
+            </div>
+        </div>
+        <button class="toolbar-btn" id="copy-layout-btn">Copy Layout</button>
+        <button class="toolbar-btn primary" id="test-arena-btn">Test Arena</button>
+    </div>
+    
+    <div id="stats-panel"></div>
+    
+    <!-- Arena Controls Panel -->
+    <div id="arena-controls-panel"></div>
+    
+    <!-- Matter.js from CDN (global) -->
+    <script src="https://unpkg.com/matter-js@0.19.0/build/matter.min.js"></script>
+    
+    <!-- TensorFlow.js from CDN (global: tf) -->
+    <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"></script>
+    
+    <!-- Three.js and game modules via import map -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+        }
+    }
+    </script>
+    
+    <!-- Game modules -->
+    <script type="module" src="src/main.js"></script>
+</body>
+</html>
