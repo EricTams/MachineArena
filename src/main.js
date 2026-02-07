@@ -18,7 +18,7 @@ import {
 } from './ml/model.js';
 import { startRecording, stopRecording, isRecording, getCompletedRuns, clearRuns } from './ml/recording.js';
 import { initFirebase, isOnline, uploadFighter, fetchFighters, fetchFighter, fetchFighterForStage } from './firebase.js';
-import { getCurrentStage, advanceStage } from './stages.js';
+import { getCurrentStage, advanceStage, retreatStage } from './stages.js';
 import { showTrainingSpinner, showVictory, showDefeat, hideFightOutcome } from './fightOutcome.js';
 
 // Game state
@@ -395,7 +395,18 @@ function setupShipSelector() {
  */
 function updateStageIndicator() {
     const el = document.getElementById('stage-indicator');
-    if (el) el.textContent = `Stage ${getCurrentStage()}`;
+    if (!el) return;
+    el.textContent = `Stage ${getCurrentStage()}`;
+
+    // AIDEV-NOTE: Debug convenience -- click to go back a stage
+    if (!el._hasRetreatHandler) {
+        el.style.cursor = 'pointer';
+        el.addEventListener('click', () => {
+            retreatStage();
+            updateStageIndicator();
+        });
+        el._hasRetreatHandler = true;
+    }
 }
 
 // ============================================================================

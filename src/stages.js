@@ -53,8 +53,21 @@ function getCompletedStages() {
     }
 }
 
+/**
+ * Goes back one stage (minimum 1). For debug/testing only.
+ * @returns {number} The new current stage
+ */
+function retreatStage() {
+    const current = getCurrentStage();
+    const prev = Math.max(1, current - 1);
+    localStorage.setItem(STORAGE_KEY, String(prev));
+    console.log(`Retreated to Stage ${prev}`);
+    return prev;
+}
+
 export {
     getCurrentStage,
     advanceStage,
+    retreatStage,
     getCompletedStages
 };

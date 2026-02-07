@@ -380,8 +380,8 @@ async function loadModelWeights() {
  * @returns {Promise<object>} { topology, weightsBase64, config, schemaVersion }
  */
 async function exportModelAsJson(model, config) {
-    // model.toJSON() returns the topology (layers, optimizer, etc.)
-    const topology = model.toJSON();
+    // model.toJSON() returns a JSON string; parse it so we store a plain object
+    const topology = JSON.parse(model.toJSON());
 
     // Extract raw weight data as a single concatenated ArrayBuffer
     const saveResult = await model.save(tf.io.withSaveHandler(async (artifacts) => {
@@ -415,8 +415,13 @@ async function importModelFromJson(exported) {
 
     const weightData = base64ToArrayBuffer(exported.weightsBase64);
 
+    // topology may be a JSON string (from model.toJSON()) or a parsed object
+    const topologyObj = typeof exported.topology === 'string'
+        ? JSON.parse(exported.topology)
+        : exported.topology;
+
     const model = await tf.loadLayersModel(tf.io.fromMemory(
-        exported.topology,
+        topologyObj,
         exported.weightSpecs,
         weightData
     ));
