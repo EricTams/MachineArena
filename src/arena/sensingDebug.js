@@ -2,7 +2,7 @@
 // Toggle with V key
 
 import * as THREE from 'three';
-import { getArenaPhysicsScale } from './arenaPhysics.js';
+import { getArenaPhysicsScale, getArenaDimensions } from './arenaPhysics.js';
 import { ARENA_DIAGONAL } from './sensing.js';
 
 // Debug state
@@ -179,18 +179,18 @@ function createThreatRadar() {
 }
 
 /**
- * Creates wall distance bars
+ * Creates wall proximity bars (perpendicular lines to each arena wall)
  */
 function createWallBars() {
     wallBars = {
-        front: createWallBar(),
-        back: createWallBar(),
+        top: createWallBar(),
+        bottom: createWallBar(),
         left: createWallBar(),
         right: createWallBar()
     };
     
-    debugGroup.add(wallBars.front);
-    debugGroup.add(wallBars.back);
+    debugGroup.add(wallBars.top);
+    debugGroup.add(wallBars.bottom);
     debugGroup.add(wallBars.left);
     debugGroup.add(wallBars.right);
 }
@@ -354,8 +354,8 @@ function updateSensingDebug(sensingState, ship, mousePosition, allShips) {
     // Update threat radar
     updateThreatRadar(sensingState.threats);
     
-    // Update wall bars
-    updateWallBars(sensingState.walls);
+    // Update wall bars (perpendicular lines from ship to each wall)
+    updateWallBars(sensingState.walls, shipX, shipY, shipAngle);
     
     // Update mouse aim and lead indicator (in world space)
     updateMouseAim(shipX, shipY, shipAngle, mousePosition, sensingState.enemies, ship, allShips);
@@ -401,32 +401,64 @@ function updateThreatRadar(threats) {
 }
 
 /**
- * Updates wall distance bars
+ * Updates wall proximity bars -- lines drawn FROM each wall inward toward the ship.
+ * Length is proportional to proximity (longer = closer to wall = more danger).
+ * Lines are in world space (counter-rotated since debugGroup rotates with ship).
  */
-function updateWallBars(walls) {
+function updateWallBars(walls, shipX, shipY, shipAngle) {
     if (!wallBars) return;
     
-    const maxLength = 30;  // Max bar length in world units
+    const { width, height } = getArenaDimensions();
+    const hw = width / 2;
+    const hh = height / 2;
     
-    // Front (ship +Y)
-    updateBarGeometry(wallBars.front, 0, 1.5, 0, walls.front * maxLength + 1.5);
-    // Back (ship -Y)
-    updateBarGeometry(wallBars.back, 0, -1.5, 0, -(walls.back * maxLength + 1.5));
-    // Left (ship -X)
-    updateBarGeometry(wallBars.left, -1.5, 0, -(walls.left * maxLength + 1.5), 0);
-    // Right (ship +X)
-    updateBarGeometry(wallBars.right, 1.5, 0, walls.right * maxLength + 1.5, 0);
+    // Counter-rotate to cancel debugGroup's ship rotation (world-space lines)
+    const cos = Math.cos(-shipAngle);
+    const sin = Math.sin(-shipAngle);
+    
+    // Top wall (+Y): from wall down toward ship
+    updateWallLine(wallBars.top, cos, sin, 0, hh - shipY, 0, -1, walls.top);
+    // Bottom wall (-Y): from wall up toward ship
+    updateWallLine(wallBars.bottom, cos, sin, 0, -hh - shipY, 0, 1, walls.bottom);
+    // Left wall (-X): from wall right toward ship
+    updateWallLine(wallBars.left, cos, sin, -hw - shipX, 0, 1, 0, walls.left);
+    // Right wall (+X): from wall left toward ship
+    updateWallLine(wallBars.right, cos, sin, hw - shipX, 0, -1, 0, walls.right);
 }
 
-function updateBarGeometry(line, startX, startY, endX, endY) {
+const WALL_VIS_LENGTH = 15;  // Max visual length of wall proximity line (matches awareness range)
+
+/**
+ * Updates a single wall line: starts at wall, extends inward proportional to proximity.
+ * wallDx/wallDy = world offset from ship to wall point.
+ * inwardDx/inwardDy = unit direction from wall toward arena center.
+ */
+function updateWallLine(line, cos, sin, wallDx, wallDy, inwardDx, inwardDy, proximity) {
+    // Wall point in group-local coords
+    const wallLocalX = wallDx * cos - wallDy * sin;
+    const wallLocalY = wallDx * sin + wallDy * cos;
+    
+    // Inward direction in group-local coords
+    const inLocalX = inwardDx * cos - inwardDy * sin;
+    const inLocalY = inwardDx * sin + inwardDy * cos;
+    
+    // Line extends from wall inward by proximity * WALL_VIS_LENGTH
+    const len = proximity * WALL_VIS_LENGTH;
+    const endLocalX = wallLocalX + inLocalX * len;
+    const endLocalY = wallLocalY + inLocalY * len;
+    
     const positions = line.geometry.attributes.position.array;
-    positions[0] = startX;
-    positions[1] = startY;
+    positions[0] = wallLocalX;
+    positions[1] = wallLocalY;
     positions[2] = 0.2;
-    positions[3] = endX;
-    positions[4] = endY;
+    positions[3] = endLocalX;
+    positions[4] = endLocalY;
     positions[5] = 0.2;
     line.geometry.attributes.position.needsUpdate = true;
+    
+    // Fade opacity based on proximity (0 = invisible, 1 = fully visible)
+    line.material.opacity = 0.15 + proximity * 0.65;
+    line.visible = proximity > 0;
 }
 
 /**
@@ -707,8 +739,8 @@ function updateDebugPanel(state) {
     text += `ang(${fmtShort(state.self.angularVelocity)}) `;
     text += `pos(${fmtShort(state.self.posX)}, ${fmtShort(state.self.posY)})\n`;
     
-    // Walls
-    text += `Walls: F(${fmtShort(state.walls.front)}) B(${fmtShort(state.walls.back)}) `;
+    // Walls (world-relative proximity)
+    text += `Walls: T(${fmtShort(state.walls.top)}) B(${fmtShort(state.walls.bottom)}) `;
     text += `L(${fmtShort(state.walls.left)}) R(${fmtShort(state.walls.right)})\n`;
     
     // Threats
@@ -743,8 +775,9 @@ function updateDebugPanel(state) {
     for (let i = 0; i < state.hazards.length; i++) {
         const h = state.hazards[i];
         if (h.present !== 1) continue;
-        text += `Hazard ${i}: dist(${fmtShort(h.distance)}) `;
-        text += `angle(${fmtShort(h.angleFromForward)})\n`;
+        text += `Hazard ${i}: prox(${fmtShort(h.proximity)}) `;
+        text += `angle(${fmtShort(h.angleFromForward)}) `;
+        text += `velTwd(${fmtShort(h.relVelocityToward)})\n`;
     }
     
     debugPanel.textContent = text;

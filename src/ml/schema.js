@@ -3,11 +3,11 @@
 // Schema version tracks the format of sensing + action data so that
 // saved datasets and models can detect incompatibility when the layout changes.
 
-const SCHEMA_VERSION = 4;
+const SCHEMA_VERSION = 6;
 
 // Sensing input size (from sensing.js flattenSensingState)
-// v2: mouse section removed (94 → 90), enemy aim features replaced with ship-facing
-const SENSING_SIZE = 90;
+// v6: walls now world-relative perpendicular proximity (top/bottom/left/right)
+const SENSING_SIZE = 86;
 
 // Action output: 13 discrete + 4 continuous = 17 dimensions
 // v4: replaces raw aimDirX/Y with structured aim (target + leads + residual)
@@ -49,7 +49,7 @@ const ACTION_NAMES = [
 const MAX_LEAD_DISTANCE = 10;   // Normalization scale for lead projections (world units)
 const MIN_ENEMY_SPEED = 0.1;    // Below this speed, velocity-based lead is zero
 
-// Human-readable names for all 90 sensing features (matches flattenSensingState order)
+// Human-readable names for all 86 sensing features (matches flattenSensingState order)
 const SENSING_FEATURE_NAMES = buildSensingFeatureNames();
 
 function buildSensingFeatureNames() {
@@ -57,8 +57,8 @@ function buildSensingFeatureNames() {
     // Self (6)
     names.push('self.velForward', 'self.velRight', 'self.angVel',
         'self.health', 'self.posX', 'self.posY');
-    // Walls (4)
-    names.push('walls.front', 'walls.back', 'walls.left', 'walls.right');
+    // Walls (4 -- world-relative perpendicular proximity)
+    names.push('walls.top', 'walls.bottom', 'walls.left', 'walls.right');
     // Threats (8)
     names.push('threat.front', 'threat.fRight', 'threat.right', 'threat.bRight',
         'threat.back', 'threat.bLeft', 'threat.left', 'threat.fLeft');
@@ -69,11 +69,11 @@ function buildSensingFeatureNames() {
             `${p}.velToward`, `${p}.velCross`, `${p}.facing`,
             `${p}.facingOffset`, `${p}.facingLeadVel`, `${p}.facingLeadFace`);
     }
-    // Hazards (4 * 5 = 20)
+    // Hazards (4 * 4 = 16)
     for (let i = 0; i < 4; i++) {
         const p = `hazard${i}`;
-        names.push(`${p}.present`, `${p}.dist`, `${p}.angle`,
-            `${p}.velToward`, `${p}.velCross`);
+        names.push(`${p}.present`, `${p}.proximity`, `${p}.angle`,
+            `${p}.velToward`);
     }
     // Blockers (4 * 4 = 16)
     for (let i = 0; i < 4; i++) {

@@ -1,6 +1,6 @@
 // Recording module - captures (sensing, action) pairs during gameplay
 //
-// Each frame of recording stores a flattened sensing state (90 floats)
+// Each frame of recording stores a flattened sensing state (86 floats)
 // and a flattened action vector (17 floats). Frames are grouped into
 // runs (one run per recording session).
 //

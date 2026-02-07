@@ -542,5 +542,7 @@ export {
     fireAllCannons,
     getProjectileCount,
     getProjectiles,
-    checkProjectileCollisions
+    checkProjectileCollisions,
+    applyDamageToPart,
+    findHitPart
 };

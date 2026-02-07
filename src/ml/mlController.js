@@ -3,7 +3,7 @@
 // Follows the same controller interface as PlayerController and RandomController:
 //   { type, getInput(ship, deltaTime), postUpdate() }
 //
-// The model receives flattened sensing (90 floats) and outputs action (17 floats).
+// The model receives flattened sensing (86 floats) and outputs action (17 floats).
 // Discrete outputs are thresholded at 0.5. Aim is reconstructed from:
 //   target selection (argmax one-hot) + velocity/facing leads + ship-relative residual.
 

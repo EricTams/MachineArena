@@ -685,7 +685,8 @@ async function fightAgainstOnlineOpponent(docId) {
 
     const success = enterArenaWithOpponent(
         playerPieces, opponentPieces, opponentModel,
-        scene, camera, renderer, screenToWorld
+        scene, camera, renderer, screenToWorld,
+        getSelectedArenaType()
     );
 
     if (success) {
@@ -880,7 +881,8 @@ async function fightAgainstSavedShip(shipId) {
 
     const success = enterArenaWithOpponent(
         playerPieces, opponentPieces, opponentModel,
-        scene, camera, renderer, screenToWorld
+        scene, camera, renderer, screenToWorld,
+        getSelectedArenaType()
     );
 
     if (success) {
@@ -1058,7 +1060,8 @@ async function startStageFightWithRecord(record) {
 
     const success = enterArenaWithOpponent(
         playerPieces, opponentPieces, opponentModel,
-        getScene(), getCamera(), getRenderer(), screenToWorld
+        getScene(), getCamera(), getRenderer(), screenToWorld,
+        getSelectedArenaType()
     );
 
     if (success) {
@@ -1097,7 +1100,8 @@ function startStageFightWithPreset() {
 
     const success = enterArenaWithOpponent(
         playerPieces, opponentPieces, opponentModel,
-        getScene(), getCamera(), getRenderer(), screenToWorld
+        getScene(), getCamera(), getRenderer(), screenToWorld,
+        getSelectedArenaType()
     );
 
     if (success) {
@@ -1190,6 +1194,15 @@ async function handleStageFightEnd(outcome) {
 }
 
 /**
+ * Reads the selected arena type from the dev toolbar dropdown
+ * @returns {string} Arena type key ('random', 'base', 'saw', 'energy')
+ */
+function getSelectedArenaType() {
+    const el = document.getElementById('arena-type-select');
+    return el ? el.value : 'random';
+}
+
+/**
  * Test Arena button -- enters free flight (no enemies), no auto-upload.
  * Sandbox for testing ship movement and controls.
  */
@@ -1213,7 +1226,8 @@ function enterTestArena() {
     const success = enterArena(
         playerPieces,
         scene, camera, renderer,
-        screenToWorld
+        screenToWorld,
+        getSelectedArenaType()
     );
 
     if (success) {

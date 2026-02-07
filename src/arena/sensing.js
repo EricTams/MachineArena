@@ -41,9 +41,11 @@ const ARENA_DIAGONAL = Math.sqrt(80 * 80 + 60 * 60);  // ~100 units
 const MAX_VELOCITY = 20;  // Tune based on actual gameplay
 const MAX_BLOCKER_RADIUS = 10;  // Largest expected blocker size
 const SECTOR_COUNT = 8;  // Threat radar sectors
+const HAZARD_AWARENESS_RANGE = 10;  // units beyond damage edge where proximity = 0
+const WALL_AWARENESS_RANGE = 15;    // units from wall where proximity = 0
 
-// Total size of flattened sensing state (v2: mouse section removed, 94 → 90)
-const SENSING_STATE_SIZE = 90;
+// Total size of flattened sensing state (v6: walls now world-relative proximity)
+const SENSING_STATE_SIZE = 86;
 
 // ============================================================================
 // Main Sensing Function
@@ -150,69 +152,26 @@ function computeSelfState(ship, shipPos, shipVel, shipAngle, dimensions) {
 // ============================================================================
 
 /**
- * Computes distances to arena walls in ship-relative directions
+ * Computes perpendicular proximity to each arena wall (world-relative).
+ * 1.0 = touching wall, 0.0 = WALL_AWARENESS_RANGE units away, clamped at 0.
  */
 function computeWallDistances(shipPos, shipAngle, dimensions) {
-    const halfWidth = dimensions.width / 2;
-    const halfHeight = dimensions.height / 2;
+    const hw = dimensions.width / 2;
+    const hh = dimensions.height / 2;
     
-    // Arena bounds
-    const minX = -halfWidth;
-    const maxX = halfWidth;
-    const minY = -halfHeight;
-    const maxY = halfHeight;
+    // Perpendicular distance from ship to each wall
+    const distTop    = hh - shipPos.y;   // +Y wall
+    const distBottom = shipPos.y + hh;   // -Y wall
+    const distLeft   = shipPos.x + hw;   // -X wall
+    const distRight  = hw - shipPos.x;   // +X wall
     
-    // Compute distance in each ship-relative direction
-    // In ship local space: Front = +Y, Back = -Y, Right = +X, Left = -X
-    // Use shipAngle to rotate local directions to world directions
-    const frontDir = rotateVector({ x: 0, y: 1 }, shipAngle);
-    const backDir = rotateVector({ x: 0, y: -1 }, shipAngle);
-    const rightDir = rotateVector({ x: 1, y: 0 }, shipAngle);
-    const leftDir = rotateVector({ x: -1, y: 0 }, shipAngle);
-    
-    // Ray-cast to find wall distance in each direction
-    const front = raycastToWalls(shipPos, frontDir, minX, maxX, minY, maxY);
-    const back = raycastToWalls(shipPos, backDir, minX, maxX, minY, maxY);
-    const right = raycastToWalls(shipPos, rightDir, minX, maxX, minY, maxY);
-    const left = raycastToWalls(shipPos, leftDir, minX, maxX, minY, maxY);
-    
-    // Normalize by arena diagonal
+    // Convert to proximity: 1.0 = touching, 0.0 = WALL_AWARENESS_RANGE away
     return {
-        front: clamp(front / ARENA_DIAGONAL, 0, 1),
-        back: clamp(back / ARENA_DIAGONAL, 0, 1),
-        left: clamp(left / ARENA_DIAGONAL, 0, 1),
-        right: clamp(right / ARENA_DIAGONAL, 0, 1)
+        top:    clamp(1 - distTop / WALL_AWARENESS_RANGE, 0, 1),
+        bottom: clamp(1 - distBottom / WALL_AWARENESS_RANGE, 0, 1),
+        left:   clamp(1 - distLeft / WALL_AWARENESS_RANGE, 0, 1),
+        right:  clamp(1 - distRight / WALL_AWARENESS_RANGE, 0, 1)
     };
-}
-
-/**
- * Raycast from position in direction to find distance to arena walls
- */
-function raycastToWalls(pos, dir, minX, maxX, minY, maxY) {
-    let minT = Infinity;
-    
-    // Check each wall
-    if (dir.x !== 0) {
-        // Left wall (x = minX)
-        const tLeft = (minX - pos.x) / dir.x;
-        if (tLeft > 0) minT = Math.min(minT, tLeft);
-        
-        // Right wall (x = maxX)
-        const tRight = (maxX - pos.x) / dir.x;
-        if (tRight > 0) minT = Math.min(minT, tRight);
-    }
-    
-    if (dir.y !== 0) {
-        // Bottom wall (y = minY)
-        const tBottom = (minY - pos.y) / dir.y;
-        if (tBottom > 0) minT = Math.min(minT, tBottom);
-        
-        // Top wall (y = maxY)
-        const tTop = (maxY - pos.y) / dir.y;
-        if (tTop > 0) minT = Math.min(minT, tTop);
-    }
-    
-    return minT === Infinity ? ARENA_DIAGONAL : minT;
 }
 
 // ============================================================================
@@ -505,6 +464,7 @@ function computeHazardsSensing(shipPos, shipVel, shipAngle, shipForward, hazards
     const hazardData = hazards.map(hazard => {
         const hazardPos = { x: hazard.x, y: hazard.y };
         const hazardVel = { x: hazard.vx || 0, y: hazard.vy || 0 };
+        const hazardRadius = hazard.radius || 0;
         
         const sensing = computeEntitySensing(
             shipPos, shipVel, shipAngle, shipForward,
@@ -512,18 +472,21 @@ function computeHazardsSensing(shipPos, shipVel, shipAngle, shipForward, hazards
             false  // No facing lead data
         );
         
-        // Remove facing lead fields (not computed for hazards)
-        delete sensing.facingOffsetToEnemy;
-        delete sensing.facingLeadVelocity;
-        delete sensing.facingLeadFacing;
-        // Remove facingUs for hazards
-        delete sensing.facingUs;
+        // Compute proximity: 1.0 at/within damage edge, 0.0 at HAZARD_AWARENESS_RANGE beyond edge
+        const rawDist = sensing.distance * ARENA_DIAGONAL;  // Denormalize center-to-center distance
+        const edgeDist = rawDist - hazardRadius;             // Distance from damage edge
+        const proximity = clamp(1.0 - edgeDist / HAZARD_AWARENESS_RANGE, 0, 1);
         
-        return sensing;
+        return {
+            present: 1,
+            proximity,
+            angleFromForward: sensing.angleFromForward,
+            relVelocityToward: sensing.relVelocityToward
+        };
     });
     
-    // Sort by distance
-    hazardData.sort((a, b) => a.distance - b.distance);
+    // Sort by proximity descending (closest/most dangerous first)
+    hazardData.sort((a, b) => b.proximity - a.proximity);
     
     // Pad to MAX_HAZARDS
     while (hazardData.length < MAX_HAZARDS) {
@@ -605,10 +568,9 @@ function createEmptyEnemyWorldSlot() {
 function createEmptyHazardSlot() {
     return {
         present: 0,
-        distance: 0,
+        proximity: 0,
         angleFromForward: 0,
-        relVelocityToward: 0,
-        relVelocityCross: 0
+        relVelocityToward: 0
     };
 }
 
@@ -639,9 +601,9 @@ function flattenSensingState(state) {
     values.push(state.self.posX);
     values.push(state.self.posY);
     
-    // Walls (4 values)
-    values.push(state.walls.front);
-    values.push(state.walls.back);
+    // Walls (4 values -- world-relative perpendicular proximity)
+    values.push(state.walls.top);
+    values.push(state.walls.bottom);
     values.push(state.walls.left);
     values.push(state.walls.right);
     
@@ -668,13 +630,12 @@ function flattenSensingState(state) {
         values.push(enemy.facingLeadFacing);
     }
     
-    // Hazards (4 * 5 = 20 values)
+    // Hazards (4 * 4 = 16 values)
     for (const hazard of state.hazards) {
         values.push(hazard.present);
-        values.push(hazard.distance);
+        values.push(hazard.proximity);
         values.push(hazard.angleFromForward);
         values.push(hazard.relVelocityToward);
-        values.push(hazard.relVelocityCross);
     }
     
     // Blockers (4 * 4 = 16 values)

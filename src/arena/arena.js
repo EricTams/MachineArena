@@ -16,6 +16,8 @@ import { initSensingDebug, cleanupSensingDebug, updateSensingDebug } from './sen
 import { isRecording, stopRecording, recordFrame } from '../ml/recording.js';
 import { initMlPanel, cleanupMlPanel } from '../ml/mlPanel.js';
 import { createMlController } from '../ml/mlController.js';
+import { resolveArenaType } from './arenaTypes.js';
+import { initHazards, updateHazards, checkHazardCollisions, cleanupHazards, getHazardSensingData } from './hazards.js';
 
 // Delay before showing fight outcome (let destruction sink in)
 const OUTCOME_DELAY_MS = 1500;
@@ -42,6 +44,12 @@ const arenaState = {
 // Store original camera settings to restore on exit
 let originalCameraSettings = null;
 
+// Store original scene background to restore on exit
+let originalBackground = null;
+
+// Current arena config (from arenaTypes.js) for the active session
+let currentArenaConfig = null;
+
 // AI control state
 let savedPlayerController = null;  // Original player controller (saved when switching to AI)
 let activeMlController = null;     // Active ML controller instance (null when player-controlled)
@@ -55,8 +63,9 @@ let activeMlController = null;     // Active ML controller instance (null when p
  * @param {THREE.Renderer} renderer - The renderer
  * @param {function} screenToWorld - Screen to world conversion function
  * @param {function} getPresetPieces - Function to get grid pieces from a preset name
+ * @param {string} arenaType - Arena type key ('base', 'saw', 'energy', or 'random')
  */
-function enterArenaLevel(levelId, playerGridPieces, scene, camera, renderer, screenToWorld, getPresetPieces) {
+function enterArenaLevel(levelId, playerGridPieces, scene, camera, renderer, screenToWorld, getPresetPieces, arenaType = 'random') {
     if (arenaState.active) {
         console.warn('Already in arena mode');
         return false;
@@ -80,7 +89,10 @@ function enterArenaLevel(levelId, playerGridPieces, scene, camera, renderer, scr
         return false;
     }
     
-    console.log(`Entering arena - ${level.name}...`);
+    const { config } = resolveArenaType(arenaType);
+    currentArenaConfig = config;
+    
+    console.log(`Entering arena - ${config.name} - ${level.name}...`);
     
     // Store references
     arenaState.scene = scene;
@@ -101,8 +113,11 @@ function enterArenaLevel(levelId, playerGridPieces, scene, camera, renderer, scr
     // Initialize arena physics
     createArenaPhysics();
     
-    // Create arena visuals (walls, background)
-    createArenaVisuals(scene);
+    // Create arena visuals (walls, background) with theme
+    createArenaVisuals(scene, config.theme);
+    
+    // Initialize hazards
+    initHazards(scene, config);
     
     // Create player ship with PlayerController
     const playerController = createPlayerController(getInputState);
@@ -175,20 +190,24 @@ function enterArenaLevel(levelId, playerGridPieces, scene, camera, renderer, scr
     arenaState.active = true;
     arenaState.lastTime = performance.now();
     
-    console.log(`Arena mode active - ${level.name}. WASD to move, mouse to aim. G for debug, V for sensing, M for ML panel, T to exit.`);
+    // Show arena name overlay
+    showArenaNameOverlay(config.name);
+    
+    console.log(`Arena mode active - ${config.name}. WASD to move, mouse to aim. G for debug, V for sensing, M for ML panel, T to exit.`);
     
     return true;
 }
 
 /**
- * Enters arena mode with the current grid pieces (legacy single-player mode)
+ * Enters arena mode with the current grid pieces (free flight / test mode)
  * @param {Array} gridPieces - Pieces from the design grid
  * @param {THREE.Scene} scene - The Three.js scene
  * @param {THREE.Camera} camera - The camera
  * @param {THREE.Renderer} renderer - The renderer
  * @param {function} screenToWorld - Screen to world conversion function
+ * @param {string} arenaType - Arena type key ('base', 'saw', 'energy', or 'random')
  */
-function enterArena(gridPieces, scene, camera, renderer, screenToWorld) {
+function enterArena(gridPieces, scene, camera, renderer, screenToWorld, arenaType = 'base') {
     if (arenaState.active) {
         console.warn('Already in arena mode');
         return false;
@@ -206,7 +225,10 @@ function enterArena(gridPieces, scene, camera, renderer, screenToWorld) {
         return false;
     }
     
-    console.log('Entering arena mode (free flight)...');
+    const { config } = resolveArenaType(arenaType);
+    currentArenaConfig = config;
+    
+    console.log(`Entering arena - ${config.name}...`);
     
     // Store references
     arenaState.scene = scene;
@@ -227,8 +249,11 @@ function enterArena(gridPieces, scene, camera, renderer, screenToWorld) {
     // Initialize arena physics
     createArenaPhysics();
     
-    // Create arena visuals (walls, background)
-    createArenaVisuals(scene);
+    // Create arena visuals (walls, background) with theme
+    createArenaVisuals(scene, config.theme);
+    
+    // Initialize hazards
+    initHazards(scene, config);
     
     // Create player ship with PlayerController at center
     const playerController = createPlayerController(getInputState);
@@ -279,7 +304,10 @@ function enterArena(gridPieces, scene, camera, renderer, screenToWorld) {
     arenaState.active = true;
     arenaState.lastTime = performance.now();
     
-    console.log('Arena mode active. WASD to move, mouse to aim. G for debug, V for sensing, M for ML panel, T to exit.');
+    // Show arena name overlay
+    showArenaNameOverlay(config.name);
+    
+    console.log(`Arena mode active - ${config.name}. WASD to move, mouse to aim. G for debug, V for sensing, M for ML panel, T to exit.`);
     
     return true;
 }
@@ -306,14 +334,16 @@ function exitArena() {
     // Remove input handlers
     removeArenaInput();
     
-    // Clean up thrust debug, sensing debug, weapon system, and controls display
+    // Clean up hazards, thrust debug, sensing debug, weapon system, and controls display
     if (arenaState.scene) {
+        cleanupHazards();
         cleanupThrustDebug(arenaState.scene);
         cleanupTargetIndicator(arenaState.scene);
         cleanupSensingDebug();
         cleanupWeaponSystem();
     }
     cleanupArenaControlsDisplay();
+    removeArenaNameOverlay();
     
     // Destroy all ships
     for (const ship of arenaState.ships) {
@@ -344,6 +374,13 @@ function exitArena() {
         arenaState.camera.position.copy(originalCameraSettings.position);
         arenaState.camera.updateProjectionMatrix();
     }
+    
+    // Restore scene background
+    if (originalBackground && arenaState.scene) {
+        arenaState.scene.background = originalBackground;
+    }
+    originalBackground = null;
+    currentArenaConfig = null;
     
     arenaState.active = false;
     arenaState.currentLevel = null;
@@ -415,8 +452,18 @@ function updateArena(deltaTime) {
     // Step physics
     stepArenaPhysics(deltaTime);
     
+    // Update hazards (movement, animation) and expose positions to sensing
+    updateHazards(deltaTime);
+    arenaState.hazards = getHazardSensingData();
+    
     // Check projectile collisions and apply damage
     const destroyedShips = checkProjectileCollisions(arenaState.ships);
+    
+    // Check hazard collisions and apply damage + impulse
+    const hazardDestroyed = checkHazardCollisions(arenaState.ships);
+    for (const ship of hazardDestroyed) {
+        if (!destroyedShips.includes(ship)) destroyedShips.push(ship);
+    }
     
     // Handle destroyed ships
     for (const ship of destroyedShips) {
@@ -568,19 +615,24 @@ function setOutcomeCallbacks(onWon, onLost) {
 }
 
 /**
- * Creates arena visual elements (walls, floor pattern)
+ * Creates arena visual elements (walls, floor pattern) themed by arena config
  * @param {THREE.Scene} scene - The scene
+ * @param {object} theme - Theme colors from arenaTypes config
  */
-function createArenaVisuals(scene) {
+function createArenaVisuals(scene, theme) {
     arenaState.arenaVisuals = new THREE.Group();
     
     const { width, height } = getArenaDimensions();
     const halfWidth = width / 2;
     const halfHeight = height / 2;
     
+    // Apply arena background color
+    originalBackground = scene.background ? scene.background.clone() : null;
+    scene.background = new THREE.Color(theme.backgroundColor);
+    
     // Wall material
     const wallMaterial = new THREE.MeshStandardMaterial({
-        color: 0x4444aa,
+        color: theme.wallColor,
         roughness: 0.7,
         metalness: 0.3
     });
@@ -611,14 +663,14 @@ function createArenaVisuals(scene) {
     arenaState.arenaVisuals.add(rightWall);
     
     // Floor grid pattern
-    const gridHelper = new THREE.GridHelper(Math.max(width, height), 20, 0x333355, 0x222244);
+    const gridHelper = new THREE.GridHelper(Math.max(width, height), 20, theme.gridColor1, theme.gridColor2);
     gridHelper.rotation.x = Math.PI / 2;
     gridHelper.position.z = -0.1;
     arenaState.arenaVisuals.add(gridHelper);
     
     // Add corner markers for visual reference
     const markerGeom = new THREE.CircleGeometry(1, 16);
-    const markerMaterial = new THREE.MeshBasicMaterial({ color: 0x666688 });
+    const markerMaterial = new THREE.MeshBasicMaterial({ color: theme.markerColor });
     
     const corners = [
         { x: -halfWidth + 5, y: halfHeight - 5 },
@@ -741,9 +793,10 @@ function isAiControlled() {
  * @param {THREE.Camera} camera - The camera
  * @param {THREE.Renderer} renderer - The renderer
  * @param {function} screenToWorld - Screen to world conversion function
+ * @param {string} arenaType - Arena type key ('base', 'saw', 'energy', or 'random')
  * @returns {boolean} Whether arena was entered successfully
  */
-function enterArenaWithOpponent(playerPieces, opponentPieces, opponentModel, scene, camera, renderer, screenToWorld) {
+function enterArenaWithOpponent(playerPieces, opponentPieces, opponentModel, scene, camera, renderer, screenToWorld, arenaType = 'random') {
     if (arenaState.active) {
         console.warn('Already in arena mode');
         return false;
@@ -755,7 +808,10 @@ function enterArenaWithOpponent(playerPieces, opponentPieces, opponentModel, sce
         return false;
     }
 
-    console.log('Entering arena - Fight Against saved opponent...');
+    const { config } = resolveArenaType(arenaType);
+    currentArenaConfig = config;
+
+    console.log(`Entering arena - ${config.name} - Fight Against saved opponent...`);
 
     arenaState.scene = scene;
     arenaState.camera = camera;
@@ -772,7 +828,8 @@ function enterArenaWithOpponent(playerPieces, opponentPieces, opponentModel, sce
     };
 
     createArenaPhysics();
-    createArenaVisuals(scene);
+    createArenaVisuals(scene, config.theme);
+    initHazards(scene, config);
 
     // Create player ship
     const playerController = createPlayerController(getInputState);
@@ -819,8 +876,38 @@ function enterArenaWithOpponent(playerPieces, opponentPieces, opponentModel, sce
     arenaState.active = true;
     arenaState.lastTime = performance.now();
 
-    console.log('Arena mode active - Fighting saved opponent. WASD to move, mouse to aim, T to exit.');
+    showArenaNameOverlay(config.name);
+
+    console.log(`Arena mode active - ${config.name}. WASD to move, mouse to aim, T to exit.`);
     return true;
+}
+
+// ============================================================================
+// Arena Name Overlay
+// ============================================================================
+
+const OVERLAY_FADE_DELAY_MS = 500;
+const OVERLAY_REMOVE_DELAY_MS = 2500;
+
+/** Shows a centered arena name that fades out */
+function showArenaNameOverlay(name) {
+    removeArenaNameOverlay();
+    const el = document.createElement('div');
+    el.id = 'arena-name-overlay';
+    el.textContent = name;
+    document.body.appendChild(el);
+
+    // Trigger fade-out after a short display
+    setTimeout(() => el.classList.add('fade-out'), OVERLAY_FADE_DELAY_MS);
+
+    // Remove from DOM after transition completes
+    setTimeout(() => removeArenaNameOverlay(), OVERLAY_REMOVE_DELAY_MS);
+}
+
+/** Removes the name overlay if present */
+function removeArenaNameOverlay() {
+    const el = document.getElementById('arena-name-overlay');
+    if (el) el.remove();
 }
 
 export {
