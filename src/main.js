@@ -730,7 +730,17 @@ async function autoTrainFromRecording() {
         return null;
     }
 
-    const model = createModel(config);
+    // Try to continue training from existing weights (accumulates learning across fights)
+    let model;
+    const existing = await loadModelWeights();
+    if (existing) {
+        model = existing.model;
+        console.log('Continuing training from existing weights');
+    } else {
+        model = createModel(config);
+        console.log('No existing weights — training from scratch');
+    }
+
     try {
         await trainModel(model, data, config);
         await saveModelWeights(model, config);
