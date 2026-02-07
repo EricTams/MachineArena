@@ -11,7 +11,7 @@ import { enterArena, enterArenaLevel, enterArenaWithOpponent, exitArena, updateA
 import { initStatsPanel, hideStats } from './statsPanel.js';
 import { getLevelList } from './arena/levels.js';
 import { setShipLayout, getShipLayout, clearGridPieces, createPiecesFromLayout } from './layout.js';
-import { generateName, setPlayerName, needsPlayerName, getPlayerName } from './naming.js';
+import { generateName, setPlayerName, getPlayerName, setShipName, getShipName, needsPlayerName } from './naming.js';
 import { saveShip, listSavedShips, loadSavedShip, deleteSavedShip } from './shipPersistence.js';
 import { importModelFromJson, exportModelAsJson, saveModelWeights, loadModelWeights } from './ml/model.js';
 import { initFirebase, isOnline, uploadFighter, fetchFighters, fetchFighter } from './firebase.js';
@@ -150,25 +150,29 @@ function spawnDefaultShip(gameState) {
  */
 function showLandingScreen() {
     return new Promise(resolve => {
-        const callsignEl = document.getElementById('landing-callsign');
+        const playerNameInput = document.getElementById('landing-player-name');
+        const shipNameEl = document.getElementById('landing-ship-name');
         const rerollBtn = document.getElementById('landing-reroll-btn');
         const startBtn = document.getElementById('landing-start-btn');
         const statusDot = document.querySelector('#landing-status .status-dot');
         const statusText = document.getElementById('landing-status-text');
 
-        if (!callsignEl || !startBtn) {
+        if (!playerNameInput || !shipNameEl || !startBtn) {
             resolve();
             return;
         }
 
-        // Set up callsign: load existing or generate new
-        let currentName = getPlayerName() || generateName();
-        callsignEl.textContent = currentName;
+        // Player name: load existing or leave empty for first visit
+        playerNameInput.value = getPlayerName() || '';
 
-        // Reroll generates a new name (even for returning players)
+        // Ship name: load existing or generate new
+        let currentShip = getShipName() || generateName();
+        shipNameEl.textContent = currentShip;
+
+        // Reroll generates a new ship name
         rerollBtn.addEventListener('click', () => {
-            currentName = generateName();
-            callsignEl.textContent = currentName;
+            currentShip = generateName();
+            shipNameEl.textContent = currentShip;
         });
 
         // Check Firebase connection status
@@ -185,17 +189,31 @@ function showLandingScreen() {
         startBtn.style.display = '';
         startBtn.textContent = isOnline() ? 'Start' : 'Start Offline';
 
-        // Start button: save name and begin loading
+        // Start button: validate, save names, begin loading
         startBtn.addEventListener('click', () => {
-            setPlayerName(currentName);
+            const playerName = playerNameInput.value.trim();
+            if (!playerName) {
+                playerNameInput.focus();
+                playerNameInput.style.borderColor = '#e53e3e';
+                return;
+            }
+
+            setPlayerName(playerName);
+            setShipName(currentShip);
+            currentShipName = currentShip;
+
             startBtn.style.display = 'none';
             rerollBtn.style.display = 'none';
 
-            // Show loading bar
             const loadingEl = document.getElementById('landing-loading');
             if (loadingEl) loadingEl.classList.add('active');
 
             resolve();
+        });
+
+        // Clear red border on input when typing
+        playerNameInput.addEventListener('input', () => {
+            playerNameInput.style.borderColor = '';
         });
     });
 }
@@ -710,8 +728,7 @@ async function autoUploadFighter() {
     const layout = getShipLayout();
     if (layout.length === 0) return;
 
-    // Determine ship name from current preset or default
-    const shipName = currentShipName || 'custom';
+    const shipName = currentShipName || getShipName() || 'unnamed';
     const levelNum = gameState.selectedLevel;
 
     // Try to export current model weights
@@ -737,8 +754,8 @@ async function autoUploadFighter() {
     });
 }
 
-// Track current ship name for auto-upload
-let currentShipName = 'starter';
+// Track current ship name for auto-upload (set from landing screen or preset load)
+let currentShipName = 'unnamed';
 
 /**
  * Loads a saved ship design onto the grid

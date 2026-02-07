@@ -294,7 +294,8 @@
             margin-bottom: 40px;
         }
         /* Callsign section */
-        #landing-callsign-label {
+        #landing-callsign-label,
+        #landing-ship-label {
             font-family: 'Segoe UI', sans-serif;
             font-size: 12px;
             color: #718096;
@@ -302,10 +303,26 @@
             letter-spacing: 2px;
             margin-bottom: 6px;
         }
-        #landing-callsign {
+        #landing-player-name {
+            width: 280px;
+            padding: 8px 14px;
+            background: #2d3748;
+            border: 1px solid #4a5568;
+            border-radius: 4px;
+            color: #e2e8f0;
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 16px;
+            text-align: center;
+            outline: none;
+            margin-bottom: 24px;
+        }
+        #landing-player-name:focus {
+            border-color: #ffcc00;
+        }
+        #landing-ship-name {
             font-family: 'Segoe UI', sans-serif;
             font-size: 26px;
-            color: #e2e8f0;
+            color: #ffcc00;
             margin-bottom: 8px;
             text-align: center;
             min-height: 36px;
@@ -589,8 +606,11 @@
         <div id="landing-title">Machine Arena</div>
         <div id="landing-subtitle">Design. Train. Fight.</div>
         
-        <div id="landing-callsign-label">Your Callsign</div>
-        <div id="landing-callsign"></div>
+        <div id="landing-callsign-label">Pilot Name</div>
+        <input type="text" id="landing-player-name" placeholder="Enter your name..." maxlength="40" />
+        
+        <div id="landing-ship-label">Ship Name</div>
+        <div id="landing-ship-name"></div>
         <button id="landing-reroll-btn">Reroll</button>
         
         <div id="landing-status">

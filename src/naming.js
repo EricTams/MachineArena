@@ -3,7 +3,8 @@
 // Generates memorable player names, persists to localStorage,
 // and provides sanitization for use as document IDs.
 
-const STORAGE_KEY = 'playerName';
+const PLAYER_NAME_KEY = 'playerName';
+const SHIP_NAME_KEY = 'shipName';
 const MAX_DOC_ID_LENGTH = 60;
 
 // ============================================================================
@@ -83,19 +84,35 @@ function sanitizeForDocId(name) {
  * @returns {string|null}
  */
 function getPlayerName() {
-    return localStorage.getItem(STORAGE_KEY);
+    return localStorage.getItem(PLAYER_NAME_KEY);
 }
 
 /**
  * Saves the player name to localStorage.
- * @param {string} name - Display name to store
+ * @param {string} name - Player's chosen name
  */
 function setPlayerName(name) {
-    localStorage.setItem(STORAGE_KEY, name);
+    localStorage.setItem(PLAYER_NAME_KEY, name);
 }
 
 /**
- * Whether the player still needs to choose a name (first visit).
+ * Returns the stored ship name, or null if not set yet.
+ * @returns {string|null}
+ */
+function getShipName() {
+    return localStorage.getItem(SHIP_NAME_KEY);
+}
+
+/**
+ * Saves the ship name to localStorage.
+ * @param {string} name - Generated ship name
+ */
+function setShipName(name) {
+    localStorage.setItem(SHIP_NAME_KEY, name);
+}
+
+/**
+ * Whether the player still needs to set up (first visit).
  * @returns {boolean}
  */
 function needsPlayerName() {
@@ -107,5 +124,7 @@ export {
     sanitizeForDocId,
     getPlayerName,
     setPlayerName,
+    getShipName,
+    setShipName,
     needsPlayerName
 };
