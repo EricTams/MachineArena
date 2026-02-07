@@ -1,0 +1,8 @@
+#!/bin/sh
+# Pre-commit hook: auto-update version timestamp in index.html
+
+DATESTAMP=$(date "+%b %-d, %Y %-I:%M %p")
+
+sed -i "s|<div id=\"landing-version\">v\([0-9.]*\) \&mdash; .*</div>|<div id=\"landing-version\">v\1 \\\&mdash; ${DATESTAMP}</div>|" index.html
+
+git add index.html
