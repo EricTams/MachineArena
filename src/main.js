@@ -7,10 +7,14 @@ import { createBin, syncBinPiecesToPhysics, getBinGroup } from './bin.js';
 import { setupInput } from './input.js';
 import { spawnInitialParts, removePiece } from './pieces/piece.js';
 import { initDebug, updateDebug } from './debug.js';
-import { enterArena, enterArenaLevel, exitArena, updateArena, isArenaActive, resizeArena } from './arena/arena.js';
+import { enterArena, enterArenaLevel, enterArenaWithOpponent, exitArena, updateArena, isArenaActive, resizeArena } from './arena/arena.js';
 import { initStatsPanel, hideStats } from './statsPanel.js';
 import { getLevelList } from './arena/levels.js';
 import { setShipLayout, getShipLayout, clearGridPieces, createPiecesFromLayout } from './layout.js';
+import { generateName, setPlayerName, needsPlayerName, getPlayerName } from './naming.js';
+import { saveShip, listSavedShips, loadSavedShip, deleteSavedShip } from './shipPersistence.js';
+import { importModelFromJson, exportModelAsJson, saveModelWeights, loadModelWeights } from './ml/model.js';
+import { initFirebase, isOnline, uploadFighter, fetchFighters, fetchFighter } from './firebase.js';
 
 // Game state
 const gameState = {
@@ -142,7 +146,46 @@ function spawnDefaultShip(gameState) {
     spawnInitialParts(gameState, { skipDefaultShipParts: true });
 }
 
+/**
+ * Shows the name prompt overlay if this is the player's first visit.
+ * Returns immediately if a name is already stored.
+ * @returns {Promise<void>}
+ */
+function showNamePromptIfNeeded() {
+    if (!needsPlayerName()) return Promise.resolve();
+
+    return new Promise(resolve => {
+        const overlay = document.getElementById('name-prompt');
+        const nameEl = document.getElementById('name-prompt-name');
+        const rerollBtn = document.getElementById('name-reroll-btn');
+        const acceptBtn = document.getElementById('name-accept-btn');
+        if (!overlay || !nameEl || !rerollBtn || !acceptBtn) {
+            resolve();
+            return;
+        }
+
+        let currentName = generateName();
+        nameEl.textContent = currentName;
+        overlay.classList.remove('hidden');
+
+        rerollBtn.addEventListener('click', () => {
+            currentName = generateName();
+            nameEl.textContent = currentName;
+        });
+
+        acceptBtn.addEventListener('click', () => {
+            setPlayerName(currentName);
+            overlay.classList.add('hidden');
+            setTimeout(() => overlay.remove(), 300);
+            resolve();
+        });
+    });
+}
+
 async function init() {
+    // Show name prompt on first visit (before loading)
+    await showNamePromptIfNeeded();
+
     const canvas = document.getElementById('game-canvas');
     
     // Helper to update loading and yield to browser
@@ -201,6 +244,12 @@ async function init() {
         setupTestArenaButton();
         setupShipSelector();
         setupLevelSelector();
+        setupSaveShipButton();
+        setupMyShipsDropdown();
+        setupOpponentsDropdown();
+        
+        // Initialize Firebase (silently no-ops if not configured)
+        initFirebase();
     });
     
     // All done - hide loading and start game
@@ -342,6 +391,439 @@ function setupLevelSelector() {
     }
 }
 
+// ============================================================================
+// Save Ship UI
+// ============================================================================
+
+/**
+ * Sets up the Save Ship button and dialog
+ */
+function setupSaveShipButton() {
+    const btn = document.getElementById('save-ship-btn');
+    const dialog = document.getElementById('save-ship-dialog');
+    const input = document.getElementById('save-ship-name');
+    const confirmBtn = document.getElementById('save-ship-confirm');
+    const cancelBtn = document.getElementById('save-ship-cancel');
+    if (!btn || !dialog || !input || !confirmBtn || !cancelBtn) return;
+
+    btn.addEventListener('click', () => {
+        if (isArenaActive()) return;
+        input.value = '';
+        dialog.classList.remove('hidden');
+        input.focus();
+    });
+
+    const closeDialog = () => dialog.classList.add('hidden');
+    cancelBtn.addEventListener('click', closeDialog);
+
+    const doSave = async () => {
+        const name = input.value.trim();
+        if (!name) return;
+        closeDialog();
+        btn.textContent = 'Saving...';
+        try {
+            const layout = getShipLayout();
+            await saveShip(name, layout);
+            btn.textContent = 'Saved!';
+            refreshMyShipsDropdown();
+        } catch (err) {
+            console.error('Save failed:', err);
+            btn.textContent = 'Error!';
+        }
+        setTimeout(() => { btn.textContent = 'Save Ship'; }, 1200);
+    };
+
+    confirmBtn.addEventListener('click', doSave);
+    input.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') doSave();
+        if (e.key === 'Escape') closeDialog();
+    });
+}
+
+// ============================================================================
+// My Ships dropdown
+// ============================================================================
+
+/**
+ * Sets up the My Ships dropdown (load design, fight against, delete)
+ */
+function setupMyShipsDropdown() {
+    const selectorBtn = document.getElementById('my-ships-btn');
+    const dropdown = document.getElementById('my-ships-dropdown');
+    if (!selectorBtn || !dropdown) return;
+
+    selectorBtn.addEventListener('click', () => {
+        dropdown.classList.toggle('open');
+        if (dropdown.classList.contains('open')) {
+            refreshMyShipsDropdown();
+        }
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('#my-ships-selector')) {
+            dropdown.classList.remove('open');
+        }
+    });
+}
+
+/**
+ * Refreshes the My Ships dropdown contents from IndexedDB
+ */
+async function refreshMyShipsDropdown() {
+    const dropdown = document.getElementById('my-ships-dropdown');
+    if (!dropdown) return;
+
+    const ships = await listSavedShips();
+    dropdown.innerHTML = '';
+
+    if (ships.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'my-ships-empty';
+        empty.textContent = 'No saved ships yet';
+        dropdown.appendChild(empty);
+        return;
+    }
+
+    for (const ship of ships) {
+        const row = document.createElement('div');
+        row.className = 'my-ship-item';
+
+        const nameBtn = document.createElement('span');
+        nameBtn.className = 'my-ship-name';
+        nameBtn.textContent = ship.shipName;
+        nameBtn.title = 'Load this design';
+        nameBtn.addEventListener('click', () => {
+            loadSavedShipDesign(ship.id);
+            dropdown.classList.remove('open');
+        });
+
+        const fightBtn = document.createElement('button');
+        fightBtn.className = 'my-ship-fight';
+        fightBtn.textContent = 'Fight';
+        fightBtn.title = 'Fight against this ship';
+        fightBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            fightAgainstSavedShip(ship.id);
+            dropdown.classList.remove('open');
+        });
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.className = 'my-ship-delete';
+        deleteBtn.textContent = '\u00D7';
+        deleteBtn.title = 'Delete';
+        deleteBtn.addEventListener('click', async (e) => {
+            e.stopPropagation();
+            await deleteSavedShip(ship.id);
+            refreshMyShipsDropdown();
+        });
+
+        row.appendChild(nameBtn);
+        if (ship.hasWeights) row.appendChild(fightBtn);
+        row.appendChild(deleteBtn);
+        dropdown.appendChild(row);
+    }
+}
+
+// ============================================================================
+// Opponents dropdown (community browser)
+// ============================================================================
+
+/**
+ * Sets up the Opponents dropdown for fighting community opponents
+ */
+function setupOpponentsDropdown() {
+    const selectorBtn = document.getElementById('opponents-btn');
+    const dropdown = document.getElementById('opponents-dropdown');
+    if (!selectorBtn || !dropdown) return;
+
+    selectorBtn.addEventListener('click', () => {
+        dropdown.classList.toggle('open');
+        if (dropdown.classList.contains('open')) {
+            refreshOpponentsDropdown();
+        }
+    });
+
+    document.addEventListener('click', (e) => {
+        if (!e.target.closest('#opponents-selector')) {
+            dropdown.classList.remove('open');
+        }
+    });
+}
+
+/**
+ * Refreshes the Opponents dropdown from Firestore
+ */
+async function refreshOpponentsDropdown() {
+    const dropdown = document.getElementById('opponents-dropdown');
+    if (!dropdown) return;
+
+    dropdown.innerHTML = '';
+
+    if (!isOnline()) {
+        const msg = document.createElement('div');
+        msg.className = 'my-ships-empty';
+        msg.textContent = 'Online features not configured';
+        dropdown.appendChild(msg);
+        return;
+    }
+
+    const loading = document.createElement('div');
+    loading.className = 'my-ships-empty';
+    loading.textContent = 'Loading...';
+    dropdown.appendChild(loading);
+
+    const fighters = await fetchFighters();
+    dropdown.innerHTML = '';
+
+    // Filter out current player's own entries
+    const playerName = getPlayerName();
+    const others = fighters.filter(f => f.playerName !== playerName && f.hasWeights);
+
+    if (others.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'my-ships-empty';
+        empty.textContent = 'No opponents found';
+        dropdown.appendChild(empty);
+        return;
+    }
+
+    for (const fighter of others) {
+        const row = document.createElement('div');
+        row.className = 'opponent-item';
+
+        const info = document.createElement('div');
+        info.className = 'opponent-info';
+
+        const name = document.createElement('div');
+        name.className = 'opponent-name';
+        name.textContent = fighter.playerName;
+
+        const detail = document.createElement('div');
+        detail.className = 'opponent-detail';
+        detail.textContent = `${fighter.shipName} \u2022 Level ${fighter.levelNum}`;
+
+        info.appendChild(name);
+        info.appendChild(detail);
+
+        const fightBtn = document.createElement('button');
+        fightBtn.className = 'opponent-fight';
+        fightBtn.textContent = 'Fight';
+        fightBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            fightAgainstOnlineOpponent(fighter.docId);
+            dropdown.classList.remove('open');
+        });
+
+        row.appendChild(info);
+        row.appendChild(fightBtn);
+        dropdown.appendChild(row);
+    }
+}
+
+/**
+ * Enters arena to fight against an online opponent from Firestore
+ * @param {string} docId - Firestore document ID
+ */
+async function fightAgainstOnlineOpponent(docId) {
+    const record = await fetchFighter(docId);
+    if (!record || !record.weightsBase64 || !record.topology) {
+        console.error('Opponent has no trained weights');
+        return;
+    }
+
+    let opponentModel;
+    try {
+        const result = await importModelFromJson({
+            topology: record.topology,
+            weightSpecs: record.weightSpecs,
+            weightsBase64: record.weightsBase64,
+            config: record.modelConfig,
+            schemaVersion: record.schemaVersion
+        });
+        opponentModel = result.model;
+    } catch (err) {
+        console.error('Failed to load opponent model:', err.message);
+        return;
+    }
+
+    const playerLayout = getShipLayout();
+    const playerPieces = createPiecesFromLayout(playerLayout);
+    if (playerPieces.length === 0) {
+        console.log('Place some pieces on the grid first');
+        opponentModel.dispose();
+        return;
+    }
+
+    const opponentPieces = createPiecesFromLayout(record.layout);
+    if (opponentPieces.length === 0) {
+        console.error('Opponent ship layout is empty');
+        opponentModel.dispose();
+        return;
+    }
+
+    const scene = getScene();
+    const camera = getCamera();
+    const renderer = getRenderer();
+
+    const success = enterArenaWithOpponent(
+        playerPieces, opponentPieces, opponentModel,
+        scene, camera, renderer, screenToWorld
+    );
+
+    if (success) {
+        showDesignMode(false);
+        updateArenaButtonText();
+    } else {
+        opponentModel.dispose();
+    }
+}
+
+// ============================================================================
+// Auto-upload at end of fight
+// ============================================================================
+
+/**
+ * Uploads the current ship design + weights to Firestore.
+ * Called automatically when exiting arena mode.
+ */
+async function autoUploadFighter() {
+    if (!isOnline()) return;
+
+    const playerName = getPlayerName();
+    if (!playerName) return;
+
+    const layout = getShipLayout();
+    if (layout.length === 0) return;
+
+    // Determine ship name from current preset or default
+    const shipName = currentShipName || 'custom';
+    const levelNum = gameState.selectedLevel;
+
+    // Try to export current model weights
+    let weightData = null;
+    const loaded = await loadModelWeights();
+    if (loaded) {
+        try {
+            weightData = await exportModelAsJson(loaded.model, loaded.config);
+        } catch (err) {
+            console.warn('Could not export weights for upload:', err.message);
+        }
+    }
+
+    uploadFighter({
+        shipName,
+        levelNum,
+        layout,
+        topology: weightData?.topology ?? null,
+        weightSpecs: weightData?.weightSpecs ?? null,
+        weightsBase64: weightData?.weightsBase64 ?? null,
+        modelConfig: weightData?.config ?? null,
+        schemaVersion: weightData?.schemaVersion ?? null
+    });
+}
+
+// Track current ship name for auto-upload
+let currentShipName = 'starter';
+
+/**
+ * Loads a saved ship design onto the grid
+ * @param {number} shipId - Saved ship record ID
+ */
+async function loadSavedShipDesign(shipId) {
+    if (isArenaActive()) {
+        console.log('Exit arena first to load a different ship');
+        return;
+    }
+    const record = await loadSavedShip(shipId);
+    if (!record) {
+        console.error('Ship not found');
+        return;
+    }
+    setShipLayout(record.layout, gameState);
+    currentShipName = record.shipName;
+
+    // Also load weights into IndexedDB if the save has them
+    if (record.weightsBase64 && record.topology) {
+        try {
+            const { model, config } = await importModelFromJson({
+                topology: record.topology,
+                weightSpecs: record.weightSpecs,
+                weightsBase64: record.weightsBase64,
+                config: record.modelConfig,
+                schemaVersion: record.schemaVersion
+            });
+            await saveModelWeights(model, config);
+            model.dispose();
+            console.log(`Loaded weights for "${record.shipName}"`);
+        } catch (err) {
+            console.warn('Could not load saved weights:', err.message);
+        }
+    }
+    console.log(`Loaded ship design: ${record.shipName}`);
+}
+
+/**
+ * Enters arena to fight against a saved ship's AI
+ * @param {number} shipId - Saved ship record ID
+ */
+async function fightAgainstSavedShip(shipId) {
+    const record = await loadSavedShip(shipId);
+    if (!record || !record.weightsBase64 || !record.topology) {
+        console.error('Ship has no trained weights to fight against');
+        return;
+    }
+
+    // Import the opponent's model
+    let opponentModel;
+    try {
+        const result = await importModelFromJson({
+            topology: record.topology,
+            weightSpecs: record.weightSpecs,
+            weightsBase64: record.weightsBase64,
+            config: record.modelConfig,
+            schemaVersion: record.schemaVersion
+        });
+        opponentModel = result.model;
+    } catch (err) {
+        console.error('Failed to load opponent model:', err.message);
+        return;
+    }
+
+    // Create player pieces from current grid layout
+    const playerLayout = getShipLayout();
+    const playerPieces = createPiecesFromLayout(playerLayout);
+    if (playerPieces.length === 0) {
+        console.log('Place some pieces on the grid first');
+        opponentModel.dispose();
+        return;
+    }
+
+    // Create opponent pieces from saved layout
+    const opponentPieces = createPiecesFromLayout(record.layout);
+    if (opponentPieces.length === 0) {
+        console.error('Saved ship layout is empty');
+        opponentModel.dispose();
+        return;
+    }
+
+    // Enter arena with the opponent
+    const scene = getScene();
+    const camera = getCamera();
+    const renderer = getRenderer();
+
+    const success = enterArenaWithOpponent(
+        playerPieces, opponentPieces, opponentModel,
+        scene, camera, renderer, screenToWorld
+    );
+
+    if (success) {
+        showDesignMode(false);
+        updateArenaButtonText();
+    } else {
+        opponentModel.dispose();
+    }
+}
+
 /**
  * Selects a level and updates the UI
  * @param {number} levelId - Level ID (0 = free flight)
@@ -407,6 +889,7 @@ function loadShipPreset(presetName) {
     
     // Set the layout - this clears and re-renders automatically
     setShipLayout(layout, gameState);
+    currentShipName = presetName;
     
     console.log(`Loaded ship: ${presetName}`);
 }
@@ -438,6 +921,9 @@ function copyShipLayoutToClipboard() {
  */
 function toggleArenaMode() {
     if (isArenaActive()) {
+        // Auto-upload fighter data before exiting (fire-and-forget)
+        autoUploadFighter();
+        
         // Exit arena, return to design
         exitArena();
         showDesignMode(true);
@@ -521,9 +1007,15 @@ function showDesignMode(visible) {
     const shipSelector = document.querySelector('.ship-selector');
     const levelSelector = document.querySelector('.level-selector');
     const copyBtn = document.getElementById('copy-layout-btn');
+    const saveBtn = document.getElementById('save-ship-btn');
+    const myShips = document.getElementById('my-ships-selector');
+    const opponents = document.getElementById('opponents-selector');
     if (shipSelector) shipSelector.style.display = visible ? '' : 'none';
     if (levelSelector) levelSelector.style.display = visible ? '' : 'none';
     if (copyBtn) copyBtn.style.display = visible ? '' : 'none';
+    if (saveBtn) saveBtn.style.display = visible ? '' : 'none';
+    if (myShips) myShips.style.display = visible ? '' : 'none';
+    if (opponents) opponents.style.display = visible ? '' : 'none';
 }
 
 let lastTime = 0;

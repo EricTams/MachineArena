@@ -279,6 +279,213 @@
             opacity: 0;
             pointer-events: none;
         }
+        
+        /* Name Prompt Overlay */
+        #name-prompt {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(10, 10, 25, 0.95);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 2000;
+            transition: opacity 0.3s ease-out;
+        }
+        #name-prompt.hidden {
+            opacity: 0;
+            pointer-events: none;
+        }
+        #name-prompt-title {
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 16px;
+            color: #a0aec0;
+            margin-bottom: 12px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+        #name-prompt-name {
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 32px;
+            color: #ffcc00;
+            margin-bottom: 28px;
+            text-align: center;
+            min-height: 44px;
+        }
+        #name-prompt-buttons {
+            display: flex;
+            gap: 12px;
+        }
+        .name-btn {
+            padding: 10px 28px;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 15px;
+            transition: background 0.15s;
+        }
+        .name-btn.accept {
+            background: #38a169;
+            color: #fff;
+        }
+        .name-btn.accept:hover {
+            background: #48b179;
+        }
+        .name-btn.reroll {
+            background: #4a5568;
+            color: #e2e8f0;
+        }
+        .name-btn.reroll:hover {
+            background: #5a6578;
+        }
+        
+        /* Save Ship Dialog */
+        #save-ship-dialog {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(10, 10, 25, 0.85);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 2000;
+            transition: opacity 0.2s ease-out;
+        }
+        #save-ship-dialog.hidden {
+            display: none;
+        }
+        .save-dialog-box {
+            background: #2d3748;
+            border: 1px solid #4a5568;
+            border-radius: 8px;
+            padding: 24px;
+            min-width: 300px;
+        }
+        .save-dialog-box h3 {
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 16px;
+            color: #ffcc00;
+            margin: 0 0 16px 0;
+        }
+        .save-dialog-box input {
+            width: 100%;
+            padding: 8px 12px;
+            background: #1a202c;
+            border: 1px solid #4a5568;
+            border-radius: 4px;
+            color: #e2e8f0;
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 14px;
+            outline: none;
+            margin-bottom: 16px;
+        }
+        .save-dialog-box input:focus {
+            border-color: #ffcc00;
+        }
+        .save-dialog-buttons {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+        
+        /* My Ships dropdown items with fight button */
+        .my-ship-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 14px;
+            gap: 8px;
+        }
+        .my-ship-item:hover {
+            background: #4a5568;
+        }
+        .my-ship-name {
+            cursor: pointer;
+            font-family: sans-serif;
+            font-size: 14px;
+            color: #e2e8f0;
+            flex: 1;
+        }
+        .my-ship-fight {
+            padding: 3px 8px;
+            background: #c53030;
+            color: #fff;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            font-family: sans-serif;
+            font-size: 11px;
+        }
+        .my-ship-fight:hover {
+            background: #e53e3e;
+        }
+        .my-ship-delete {
+            padding: 3px 6px;
+            background: none;
+            color: #718096;
+            border: none;
+            cursor: pointer;
+            font-family: sans-serif;
+            font-size: 13px;
+        }
+        .my-ship-delete:hover {
+            color: #e53e3e;
+        }
+        .my-ships-empty {
+            padding: 10px 14px;
+            font-family: sans-serif;
+            font-size: 13px;
+            color: #718096;
+            font-style: italic;
+        }
+        
+        /* Community opponent item */
+        .opponent-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 14px;
+            gap: 8px;
+        }
+        .opponent-item:hover {
+            background: #4a5568;
+        }
+        .opponent-info {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            flex: 1;
+        }
+        .opponent-name {
+            font-family: sans-serif;
+            font-size: 13px;
+            color: #e2e8f0;
+        }
+        .opponent-detail {
+            font-family: sans-serif;
+            font-size: 11px;
+            color: #718096;
+        }
+        .opponent-fight {
+            padding: 4px 10px;
+            background: #c53030;
+            color: #fff;
+            border: none;
+            border-radius: 3px;
+            cursor: pointer;
+            font-family: sans-serif;
+            font-size: 12px;
+            white-space: nowrap;
+        }
+        .opponent-fight:hover {
+            background: #e53e3e;
+        }
         #loading-title {
             font-family: 'Segoe UI', sans-serif;
             font-size: 24px;
@@ -308,6 +515,28 @@
     </style>
 </head>
 <body>
+    <!-- Save Ship Dialog -->
+    <div id="save-ship-dialog" class="hidden">
+        <div class="save-dialog-box">
+            <h3>Save Ship</h3>
+            <input type="text" id="save-ship-name" placeholder="Enter ship name..." maxlength="40" />
+            <div class="save-dialog-buttons">
+                <button class="name-btn reroll" id="save-ship-cancel">Cancel</button>
+                <button class="name-btn accept" id="save-ship-confirm">Save</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Name Prompt (shown on first visit) -->
+    <div id="name-prompt" class="hidden">
+        <div id="name-prompt-title">Your Callsign</div>
+        <div id="name-prompt-name"></div>
+        <div id="name-prompt-buttons">
+            <button class="name-btn reroll" id="name-reroll-btn">Reroll</button>
+            <button class="name-btn accept" id="name-accept-btn">Accept</button>
+        </div>
+    </div>
+    
     <!-- Loading Screen -->
     <div id="loading-screen">
         <div id="loading-title">Machine Arena</div>
@@ -337,6 +566,15 @@
                 <button class="level-option" data-level="1">Level 1: Speeder</button>
             </div>
         </div>
+        <div class="ship-selector" id="my-ships-selector">
+            <button class="toolbar-btn ship-selector-btn" id="my-ships-btn">My Ships</button>
+            <div class="ship-dropdown" id="my-ships-dropdown"></div>
+        </div>
+        <div class="ship-selector" id="opponents-selector">
+            <button class="toolbar-btn ship-selector-btn" id="opponents-btn">Opponents</button>
+            <div class="ship-dropdown" id="opponents-dropdown" style="min-width: 240px;"></div>
+        </div>
+        <button class="toolbar-btn" id="save-ship-btn">Save Ship</button>
         <button class="toolbar-btn" id="copy-layout-btn">Copy Layout</button>
         <button class="toolbar-btn primary" id="test-arena-btn">Test Arena</button>
     </div>
@@ -345,6 +583,20 @@
     
     <!-- Arena Controls Panel -->
     <div id="arena-controls-panel"></div>
+    
+    <!-- Firebase SDK (compat mode for CDN usage) -->
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-firestore-compat.js"></script>
+    <script>
+        window.__FIREBASE_CONFIG = {
+            apiKey: "AIzaSyDUrZA7FG54yCO8inYjlWjut_VpNN8ktTk",
+            authDomain: "machinearena-33771.firebaseapp.com",
+            projectId: "machinearena-33771",
+            storageBucket: "machinearena-33771.firebasestorage.app",
+            messagingSenderId: "603440563157",
+            appId: "1:603440563157:web:dc0b5a59a86dff0f2a735c"
+        };
+    </script>
     
     <!-- Matter.js from CDN (global) -->
     <script src="https://unpkg.com/matter-js@0.19.0/build/matter.min.js"></script>

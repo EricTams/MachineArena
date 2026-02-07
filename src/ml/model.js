@@ -369,6 +369,90 @@ async function loadModelWeights() {
 }
 
 // ============================================================================
+// Portable weight export / import (JSON-friendly)
+// ============================================================================
+
+/**
+ * Exports a TF.js model to a JSON-friendly object (topology + base64 weights).
+ * The resulting object can be stored in Firestore or saved to IndexedDB as-is.
+ * @param {tf.Sequential} model - Trained model
+ * @param {object} config - Model config used to create/train this model
+ * @returns {Promise<object>} { topology, weightsBase64, config, schemaVersion }
+ */
+async function exportModelAsJson(model, config) {
+    // model.toJSON() returns the topology (layers, optimizer, etc.)
+    const topology = model.toJSON();
+
+    // Extract raw weight data as a single concatenated ArrayBuffer
+    const saveResult = await model.save(tf.io.withSaveHandler(async (artifacts) => {
+        return { modelArtifactsInfo: { dateSaved: new Date() }, ...artifacts };
+    }));
+
+    // The weightData is an ArrayBuffer; encode as base64 for JSON compatibility
+    const weightData = saveResult.weightData;
+    const weightsBase64 = arrayBufferToBase64(weightData);
+
+    return {
+        topology,
+        weightSpecs: saveResult.weightSpecs,
+        weightsBase64,
+        config,
+        schemaVersion: SCHEMA_VERSION
+    };
+}
+
+/**
+ * Reconstructs a TF.js model from a portable JSON export.
+ * @param {object} exported - Object from exportModelAsJson
+ * @returns {Promise<{ model: tf.Sequential, config: object }>}
+ */
+async function importModelFromJson(exported) {
+    if (exported.schemaVersion !== SCHEMA_VERSION) {
+        throw new Error(
+            `Schema mismatch: export v${exported.schemaVersion}, current v${SCHEMA_VERSION}`
+        );
+    }
+
+    const weightData = base64ToArrayBuffer(exported.weightsBase64);
+
+    const model = await tf.loadLayersModel(tf.io.fromMemory(
+        exported.topology,
+        exported.weightSpecs,
+        weightData
+    ));
+
+    const lr = exported.config?.learningRate ?? DEFAULT_MODEL_CONFIG.learningRate;
+    model.compile({
+        optimizer: tf.train.adam(lr),
+        loss: 'meanSquaredError'
+    });
+
+    return { model, config: exported.config };
+}
+
+// ============================================================================
+// Base64 helpers
+// ============================================================================
+
+function arrayBufferToBase64(buffer) {
+    const bytes = new Uint8Array(buffer);
+    let binary = '';
+    for (let i = 0; i < bytes.byteLength; i++) {
+        binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
+}
+
+function base64ToArrayBuffer(base64) {
+    const binary = atob(base64);
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) {
+        bytes[i] = binary.charCodeAt(i);
+    }
+    return bytes.buffer;
+}
+
+// ============================================================================
 // Cleanup helpers
 // ============================================================================
 
@@ -393,5 +477,7 @@ export {
     evaluateModel,
     saveModelWeights,
     loadModelWeights,
+    exportModelAsJson,
+    importModelFromJson,
     disposeTrainingData
 };

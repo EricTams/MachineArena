@@ -386,12 +386,13 @@ function updateArena(deltaTime) {
         }
         
         // Update weapon system for this ship
-        // Player ship: mouse aim (or ML controller aim when AI-controlled)
         let aimTarget = null;
         if (ship === arenaState.playerShip) {
             aimTarget = activeMlController
                 ? activeMlController.getLastAimTarget()
                 : mousePos;
+        } else if (ship.controller && ship.controller.getLastAimTarget) {
+            aimTarget = ship.controller.getLastAimTarget();
         }
         updateWeaponSystem(ship, deltaTime, aimTarget);
         
@@ -450,6 +451,20 @@ function updateArena(deltaTime) {
         // Record frame for ML training (sense + action from this frame)
         if (isRecording() && playerInput) {
             recordFrame(arenaState.sensingState, playerInput, arenaState.playerShip, mousePos);
+        }
+    }
+
+    // Compute sensing for non-player ML-controlled ships (opponents)
+    const projectilesForOpponents = getProjectiles();
+    for (const ship of arenaState.ships) {
+        if (!ship || ship === arenaState.playerShip || ship.destroyed) continue;
+        if (ship.controller && ship.controller.type === 'ml' && ship.controller.setSensingState) {
+            const opponentSensing = computeSensingState(
+                ship, arenaState.ships,
+                arenaState.hazards, arenaState.blockers,
+                projectilesForOpponents
+            );
+            ship.controller.setSensingState(opponentSensing);
         }
     }
     
@@ -663,9 +678,102 @@ function isAiControlled() {
     return activeMlController !== null;
 }
 
+/**
+ * Enters arena with a specific opponent ship controlled by an ML model.
+ * Used for "Fight Against" saved ships (offline opponent training).
+ * @param {Array} playerPieces - Player's ship pieces
+ * @param {Array} opponentPieces - Opponent's ship pieces
+ * @param {tf.Sequential} opponentModel - Trained model for the opponent
+ * @param {THREE.Scene} scene - The Three.js scene
+ * @param {THREE.Camera} camera - The camera
+ * @param {THREE.Renderer} renderer - The renderer
+ * @param {function} screenToWorld - Screen to world conversion function
+ * @returns {boolean} Whether arena was entered successfully
+ */
+function enterArenaWithOpponent(playerPieces, opponentPieces, opponentModel, scene, camera, renderer, screenToWorld) {
+    if (arenaState.active) {
+        console.warn('Already in arena mode');
+        return false;
+    }
+
+    const hasCore = playerPieces.some(p => p.category === 'CORE' || p.type === 'core');
+    if (!hasCore) {
+        console.warn('Ship needs a core piece to fly');
+        return false;
+    }
+
+    console.log('Entering arena - Fight Against saved opponent...');
+
+    arenaState.scene = scene;
+    arenaState.camera = camera;
+    arenaState.renderer = renderer;
+    arenaState.currentLevel = null;
+    arenaState.ships = [];
+
+    originalCameraSettings = {
+        left: camera.left,
+        right: camera.right,
+        top: camera.top,
+        bottom: camera.bottom,
+        position: camera.position.clone()
+    };
+
+    createArenaPhysics();
+    createArenaVisuals(scene);
+
+    // Create player ship
+    const playerController = createPlayerController(getInputState);
+    arenaState.playerShip = createArenaShip(playerPieces, {
+        team: 1,
+        spawnX: 0,
+        spawnY: -20,
+        controller: playerController
+    });
+
+    if (!arenaState.playerShip) {
+        console.error('Failed to create player ship');
+        exitArena();
+        return false;
+    }
+    arenaState.ships.push(arenaState.playerShip);
+    scene.add(arenaState.playerShip.mesh);
+
+    // Create opponent ship with ML controller
+    const mlController = createMlController(opponentModel);
+    const opponentShip = createArenaShip(opponentPieces, {
+        team: 2,
+        spawnX: 0,
+        spawnY: 15,
+        controller: mlController
+    });
+
+    if (opponentShip) {
+        arenaState.ships.push(opponentShip);
+        scene.add(opponentShip.mesh);
+    }
+
+    setupArenaCamera(camera);
+    initThrustDebug(scene);
+    setThrustDebugEnabled(true);
+    initTargetIndicator(scene);
+    initWeaponSystem(scene);
+    initArenaControlsDisplay();
+    initSensingDebug(scene);
+    initMlPanel();
+    setupArenaInput(arenaState, screenToWorld, renderer.domElement);
+    setDebugVisible(false);
+
+    arenaState.active = true;
+    arenaState.lastTime = performance.now();
+
+    console.log('Arena mode active - Fighting saved opponent. WASD to move, mouse to aim, T to exit.');
+    return true;
+}
+
 export {
     enterArena,
     enterArenaLevel,
+    enterArenaWithOpponent,
     exitArena,
     updateArena,
     isArenaActive,
