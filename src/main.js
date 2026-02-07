@@ -1004,8 +1004,11 @@ async function enterFight() {
         return;
     }
 
+    const level = gameState.selectedLevel;
+    console.log(`[Fight] Current level: ${level === 0 ? 'Free Flight' : level}`);
+
     // Level selected -- fight level enemies
-    if (gameState.selectedLevel > 0) {
+    if (level > 0) {
         startRankedArena();
         return;
     }
@@ -1013,6 +1016,7 @@ async function enterFight() {
     // No level -- pick a saved ship, or fall back to a random preset
     const ships = await listSavedShips();
     const opponents = ships.filter(s => s.hasWeights);
+    console.log(`[Fight] Found ${opponents.length} saved ship(s) with trained weights`);
 
     if (opponents.length > 0) {
         showOpponentPicker(opponents);
