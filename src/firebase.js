@@ -143,10 +143,44 @@ async function fetchFighter(docId) {
     }
 }
 
+/**
+ * Fetches a random opponent for a given stage from Firestore.
+ * Excludes the current player's own entries.
+ * @param {number} stageNum - Stage number to query
+ * @returns {Promise<object|null>} Full fighter document or null if none found
+ */
+async function fetchFighterForStage(stageNum) {
+    if (!isOnline()) return null;
+
+    const playerName = getPlayerName();
+
+    try {
+        const snapshot = await db.collection(COLLECTION)
+            .where('levelNum', '==', stageNum)
+            .get();
+
+        // Filter out own entries and entries without weights
+        const candidates = snapshot.docs.filter(doc => {
+            const d = doc.data();
+            return d.playerName !== playerName && !!d.weightsBase64;
+        });
+
+        if (candidates.length === 0) return null;
+
+        // Pick a random candidate
+        const pick = candidates[Math.floor(Math.random() * candidates.length)];
+        return { docId: pick.id, ...pick.data() };
+    } catch (err) {
+        console.warn('Failed to fetch stage opponent:', err.message);
+        return null;
+    }
+}
+
 export {
     initFirebase,
     isOnline,
     uploadFighter,
     fetchFighters,
-    fetchFighter
+    fetchFighter,
+    fetchFighterForStage
 };

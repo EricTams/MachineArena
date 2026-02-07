@@ -6,11 +6,12 @@ Get Machine Arena deployed to GitHub Pages, then add Firebase Firestore for shar
 
 ## Status
 
-- [ ] Phase 1: Git repo + GitHub Pages
-- [ ] Phase 2: Sci-fi name generator + player identity
-- [ ] Phase 3: Local ship save/load + offline opponents
-- [ ] Phase 4: Portable weight export/import
-- [ ] Phase 5: Firebase integration (auto-upload + community browser)
+- [x] Phase 1: Git repo + GitHub Pages
+- [x] Phase 2: Sci-fi name generator + player identity
+- [x] Phase 3: Local ship save/load + offline opponents
+- [x] Phase 4: Portable weight export/import
+- [x] Phase 5: Firebase integration (auto-upload + community browser)
+- [x] Phase 6: Stage-based PvP ladder with auto-training
 
 ## Dependency Graph
 
@@ -117,22 +118,53 @@ Document ID: {sanitizedPlayerName}_{shipName}_{levelNum}
 }
 ```
 
-- Upsert semantics -- each fight overwrites previous version for that player+ship+level
-- Players climb a ladder of 5-15 levels; each level snapshot is preserved
+- Upsert semantics -- each fight overwrites previous version for that player+ship+stage
+- `levelNum` field doubles as stage number for the PvP ladder
 - Example ID: `"crimson-volatile-sentinel_gunboat_3"`
 
 ### Auto-Upload Flow
 
 1. Player name already set from Phase 2 (localStorage)
-2. At **end of each arena fight**, automatically:
-   - Serialize current ship layout
-   - Export current model weights (Phase 4 functions)
-   - Upsert `fighters` document to Firestore
-3. Fire-and-forget in background -- does not block gameplay
+2. At **end of a won stage fight**, automatically:
+   - Stop recording player actions
+   - Auto-train ML model from recorded data (~15 epochs, 1-3s)
+   - Export fresh model weights (Phase 4 functions)
+   - Upsert `fighters` document to Firestore tagged with the stage number
+3. Upload runs in background after training completes
 4. Offline/failure: log warning, don't disrupt
 
 ### Community Browser UI
 
 - "Opponents" panel: fetches `fighters` from Firestore
-- Shows player name, ship name, level number, last updated
+- Shows player name, ship name, stage number, last updated
 - "Fight" button loads opponent's ship + weights as ML-controlled enemy
+
+---
+
+## Phase 6: Stage-Based PvP Ladder
+
+**Goal:** Replace preset levels with a stage-based PvP system where players fight other players' uploaded fighters.
+
+### Player Journey
+
+1. Design ship on grid
+2. Click FIGHT -- system fetches a random Stage N opponent from Firebase
+3. If no opponents found (or offline): fall back to a preset ship with random AI
+4. Fight in arena -- player actions auto-recorded behind the scenes
+5. Fight ends -- brief "Training AI..." spinner while model trains automatically
+6. **Win**: Ship+weights uploaded as Stage N fighter, Stage N+1 unlocked, VICTORY banner
+7. **Lose**: AI still learns from the fight, DEFEATED banner with Retry option
+
+### Stage Progression
+
+- Stages start at 1 and go as high as the player climbs (no cap)
+- Stage N opponents are players who beat Stage N-1 (difficulty scales naturally)
+- Progress persisted in `localStorage` key `'currentStage'`
+- Completed stages tracked in `localStorage` key `'completedStages'`
+
+### Auto-Training
+
+- Recording starts automatically when arena fight begins (no R key needed)
+- Training runs automatically when fight ends (win or lose)
+- ~15 epochs, takes 1-3 seconds with a brief loading spinner
+- R key and ML panel remain available as power-user/debug tools

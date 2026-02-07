@@ -17,6 +17,9 @@ import { isRecording, stopRecording, recordFrame } from '../ml/recording.js';
 import { initMlPanel, cleanupMlPanel } from '../ml/mlPanel.js';
 import { createMlController } from '../ml/mlController.js';
 
+// Delay before showing fight outcome (let destruction sink in)
+const OUTCOME_DELAY_MS = 1500;
+
 // Arena state
 const arenaState = {
     active: false,
@@ -30,7 +33,10 @@ const arenaState = {
     lastTime: 0,
     hazards: [],         // Moving hazards (future use)
     blockers: [],        // Static circular obstacles (future use)
-    sensingState: null   // Current sensing state for player ship
+    sensingState: null,  // Current sensing state for player ship
+    onFightWon: null,    // Callback when player wins (all enemies destroyed)
+    onFightLost: null,   // Callback when player loses (player core destroyed)
+    outcomeResolved: false  // Prevents double-firing outcome callbacks
 };
 
 // Store original camera settings to restore on exit
@@ -347,6 +353,9 @@ function exitArena() {
     arenaState.hazards = [];
     arenaState.blockers = [];
     arenaState.sensingState = null;
+    arenaState.onFightWon = null;
+    arenaState.onFightLost = null;
+    arenaState.outcomeResolved = false;
     
     // Restore design mode debug visibility
     setDebugVisible(true);
@@ -487,7 +496,8 @@ function updateArena(deltaTime) {
 }
 
 /**
- * Handles a ship being destroyed (core destroyed)
+ * Handles a ship being destroyed (core destroyed).
+ * Checks for win/loss conditions and fires outcome callbacks.
  * @param {object} ship - The destroyed ship
  */
 function handleShipDestroyed(ship) {
@@ -501,17 +511,60 @@ function handleShipDestroyed(ship) {
         ship.body = null;
     }
     
-    // Hide the ship mesh (keep it for now with dark tint showing destruction)
+    // Hide the ship mesh
     if (ship.mesh) {
         ship.mesh.visible = false;
     }
-    
-    // Check if player was destroyed
+
+    if (arenaState.outcomeResolved) return;
+
+    // Check if player was destroyed -> LOSS
     if (ship === arenaState.playerShip) {
-        console.log('Player ship destroyed! Press T to exit arena.');
+        console.log('Player ship destroyed!');
+        resolveFightOutcome('lost');
+        return;
     }
     
-    // AIDEV-TODO: Add victory/defeat conditions, respawn logic, etc.
+    // Check if all enemies are destroyed -> WIN
+    const enemiesAlive = arenaState.ships.some(
+        s => s !== arenaState.playerShip && !s.destroyed
+    );
+    if (!enemiesAlive) {
+        console.log('All enemies destroyed!');
+        resolveFightOutcome('won');
+    }
+}
+
+/**
+ * Fires the appropriate outcome callback after a delay.
+ * @param {'won'|'lost'} outcome
+ */
+function resolveFightOutcome(outcome) {
+    if (arenaState.outcomeResolved) return;
+    arenaState.outcomeResolved = true;
+
+    const callback = outcome === 'won'
+        ? arenaState.onFightWon
+        : arenaState.onFightLost;
+
+    if (!callback) {
+        console.log(`Fight ${outcome} (no callback set)`);
+        return;
+    }
+
+    // Delay so the player sees the destruction before the overlay
+    setTimeout(() => callback(), OUTCOME_DELAY_MS);
+}
+
+/**
+ * Sets outcome callbacks for the current arena session.
+ * @param {function|null} onWon - Called when player wins
+ * @param {function|null} onLost - Called when player loses
+ */
+function setOutcomeCallbacks(onWon, onLost) {
+    arenaState.onFightWon = onWon;
+    arenaState.onFightLost = onLost;
+    arenaState.outcomeResolved = false;
 }
 
 /**
@@ -781,5 +834,6 @@ export {
     resizeArena,
     switchToAiControl,
     switchToPlayerControl,
-    isAiControlled
+    isAiControlled,
+    setOutcomeCallbacks
 };

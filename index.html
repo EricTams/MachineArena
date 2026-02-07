@@ -121,50 +121,6 @@
             background: #4a5568;
         }
         
-        /* Level selector dropdown */
-        .level-selector {
-            position: relative;
-        }
-        .level-selector-btn {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-        }
-        .level-selector-btn::after {
-            content: '';
-            border-left: 4px solid transparent;
-            border-right: 4px solid transparent;
-            border-top: 5px solid currentColor;
-        }
-        .level-dropdown {
-            position: absolute;
-            top: 100%;
-            right: 0;
-            margin-top: 4px;
-            background: #2d3748;
-            border: 1px solid #4a5568;
-            border-radius: 4px;
-            min-width: 180px;
-            display: none;
-            overflow: hidden;
-        }
-        .level-dropdown.open {
-            display: block;
-        }
-        .level-option {
-            padding: 10px 14px;
-            cursor: pointer;
-            font-family: sans-serif;
-            font-size: 14px;
-            color: #e2e8f0;
-            border: none;
-            background: none;
-            width: 100%;
-            text-align: left;
-        }
-        .level-option:hover {
-            background: #4a5568;
-        }
         
         /* Stats Panel */
         #stats-panel {
@@ -512,7 +468,6 @@
         }
 
         /* Save Ship Dialog */
-        #fight-picker-dialog,
         #save-ship-dialog {
             position: fixed;
             top: 0;
@@ -526,7 +481,6 @@
             z-index: 2000;
             transition: opacity 0.2s ease-out;
         }
-        #fight-picker-dialog.hidden,
         #save-ship-dialog.hidden {
             display: none;
         }
@@ -706,17 +660,6 @@
     </style>
 </head>
 <body>
-    <!-- Fight Opponent Picker -->
-    <div id="fight-picker-dialog" class="hidden">
-        <div class="save-dialog-box">
-            <h3>Choose Opponent</h3>
-            <div id="fight-picker-list" style="max-height: 240px; overflow-y: auto;"></div>
-            <div class="save-dialog-buttons" style="margin-top: 12px;">
-                <button class="name-btn reroll" id="fight-picker-cancel">Cancel</button>
-            </div>
-        </div>
-    </div>
-    
     <!-- Save Ship Dialog -->
     <div id="save-ship-dialog" class="hidden">
         <div class="save-dialog-box">
@@ -733,7 +676,7 @@
     <div id="landing-screen">
         <div id="landing-title">Machine Arena</div>
         <div id="landing-subtitle">Design. Train. Fight.</div>
-        <div id="landing-version">v0.1 &mdash; Feb 6, 2026 7:00 PM</div>
+        <div id="landing-version">v0.2 &mdash; Feb 6, 2026 11:00 PM</div>
         
         <div id="landing-callsign-label">Pilot Name</div>
         <input type="text" id="landing-player-name" placeholder="Enter your name..." maxlength="40" />
@@ -766,24 +709,18 @@
             <button id="tips-dismiss" title="Dismiss">&times;</button>
         </h4>
         <ol>
-            <li>Drag parts from the <span class="highlight">left panel</span> onto your ship</li>
-            <li>Pick a level from the <span class="highlight">top-right dropdown</span></li>
-            <li>Hit <span class="highlight">FIGHT!</span> to enter the arena</li>
-            <li>Your ship's AI trains as it fights &mdash; the more rounds, the smarter it gets</li>
-            <li>Press <kbd>T</kbd> to exit the arena</li>
+            <li>Drag parts from the <span class="highlight">bin</span> onto your ship grid</li>
+            <li>Hit <span class="highlight">FIGHT!</span> to challenge a Stage 1 opponent</li>
+            <li>Your AI <span class="highlight">learns automatically</span> from every fight</li>
+            <li>Win to <span class="highlight">upload your fighter</span> and advance to the next stage</li>
+            <li>Press <kbd>T</kbd> to exit the arena early</li>
             <li>Use <span class="highlight">Save Ship</span> to keep your design &amp; trained AI</li>
         </ol>
     </div>
     
     <!-- Main toolbar (gameplay) -->
     <div id="toolbar">
-        <div class="level-selector">
-            <button class="toolbar-btn level-selector-btn" id="level-selector-btn">Free Flight</button>
-            <div class="level-dropdown" id="level-dropdown">
-                <button class="level-option" data-level="0">Free Flight</button>
-                <button class="level-option" data-level="1">Level 1: Speeder</button>
-            </div>
-        </div>
+        <span class="toolbar-btn" id="stage-indicator" style="cursor:default; opacity:0.85;">Stage 1</span>
         <button class="toolbar-btn primary" id="fight-btn">FIGHT!</button>
         <button class="toolbar-btn" id="save-ship-btn">Save Ship</button>
         <div class="ship-selector" id="my-ships-selector">
@@ -807,7 +744,7 @@
                 <button class="ship-option" data-ship="tank">Tank</button>
             </div>
         </div>
-        <button class="dev-btn" id="test-arena-btn">Test Arena</button>
+        <button class="dev-btn" id="test-arena-btn">Free Flight</button>
         <button class="dev-btn" id="copy-layout-btn">Copy Layout</button>
     </div>
     

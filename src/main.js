@@ -7,14 +7,19 @@ import { createBin, syncBinPiecesToPhysics, getBinGroup } from './bin.js';
 import { setupInput } from './input.js';
 import { spawnInitialParts, removePiece } from './pieces/piece.js';
 import { initDebug, updateDebug } from './debug.js';
-import { enterArena, enterArenaLevel, enterArenaWithOpponent, exitArena, updateArena, isArenaActive, resizeArena } from './arena/arena.js';
+import { enterArena, enterArenaWithOpponent, exitArena, updateArena, isArenaActive, resizeArena, setOutcomeCallbacks } from './arena/arena.js';
 import { initStatsPanel, hideStats } from './statsPanel.js';
-import { getLevelList } from './arena/levels.js';
 import { setShipLayout, getShipLayout, clearGridPieces, createPiecesFromLayout } from './layout.js';
 import { generateName, setPlayerName, getPlayerName, setShipName, getShipName, needsPlayerName } from './naming.js';
 import { saveShip, listSavedShips, loadSavedShip, deleteSavedShip } from './shipPersistence.js';
-import { importModelFromJson, exportModelAsJson, saveModelWeights, loadModelWeights, createModel, getDefaultConfig } from './ml/model.js';
-import { initFirebase, isOnline, uploadFighter, fetchFighters, fetchFighter } from './firebase.js';
+import {
+    importModelFromJson, exportModelAsJson, saveModelWeights, loadModelWeights,
+    createModel, getDefaultConfig, prepareTrainingData, trainModel, disposeTrainingData
+} from './ml/model.js';
+import { startRecording, stopRecording, isRecording, getCompletedRuns, clearRuns } from './ml/recording.js';
+import { initFirebase, isOnline, uploadFighter, fetchFighters, fetchFighter, fetchFighterForStage } from './firebase.js';
+import { getCurrentStage, advanceStage } from './stages.js';
+import { showTrainingSpinner, showVictory, showDefeat, hideFightOutcome } from './fightOutcome.js';
 
 // Game state
 const gameState = {
@@ -22,8 +27,7 @@ const gameState = {
     gridPieces: [],    // Pieces placed on the grid (no physics)
     binPieces: [],     // Pieces in the bin (physics simulated)
     selectedPiece: null,
-    dragging: false,
-    selectedLevel: 0   // 0 = free flight, 1+ = level IDs
+    dragging: false
 };
 
 // Landing screen and loading bar helpers
@@ -291,11 +295,11 @@ async function init() {
         setupFightButton();
         setupTestArenaButton();
         setupShipSelector();
-        setupLevelSelector();
         setupSaveShipButton();
         setupMyShipsDropdown();
         setupOpponentsDropdown();
         setupTipsDismiss();
+        updateStageIndicator();
     });
     
     // All done - hide landing screen and start game
@@ -339,17 +343,11 @@ function setupCopyLayoutButton() {
 }
 
 /**
- * Sets up the FIGHT! button and opponent picker dialog
+ * Sets up the FIGHT! button
  */
 function setupFightButton() {
     const btn = document.getElementById('fight-btn');
     if (btn) btn.addEventListener('click', () => enterFight());
-
-    const cancelBtn = document.getElementById('fight-picker-cancel');
-    const dialog = document.getElementById('fight-picker-dialog');
-    if (cancelBtn && dialog) {
-        cancelBtn.addEventListener('click', () => dialog.classList.add('hidden'));
-    }
 }
 
 /**
@@ -393,54 +391,11 @@ function setupShipSelector() {
 }
 
 /**
- * Sets up the level selector dropdown
+ * Updates the stage indicator to show the current stage.
  */
-function setupLevelSelector() {
-    const selectorBtn = document.getElementById('level-selector-btn');
-    const dropdown = document.getElementById('level-dropdown');
-    if (!selectorBtn || !dropdown) return;
-    
-    // Populate dropdown dynamically from level definitions
-    dropdown.innerHTML = '';
-    
-    // Add Free Flight option first
-    const freeFlightOption = document.createElement('button');
-    freeFlightOption.className = 'level-option';
-    freeFlightOption.dataset.level = '0';
-    freeFlightOption.textContent = 'Free Flight';
-    dropdown.appendChild(freeFlightOption);
-    
-    // Add all defined levels
-    const levels = getLevelList();
-    for (const level of levels) {
-        const option = document.createElement('button');
-        option.className = 'level-option';
-        option.dataset.level = String(level.id);
-        option.textContent = level.name;
-        dropdown.appendChild(option);
-    }
-    
-    // Toggle dropdown on button click
-    selectorBtn.addEventListener('click', () => {
-        dropdown.classList.toggle('open');
-    });
-    
-    // Close dropdown when clicking outside
-    document.addEventListener('click', (e) => {
-        if (!e.target.closest('.level-selector')) {
-            dropdown.classList.remove('open');
-        }
-    });
-    
-    // Handle level option clicks
-    const options = dropdown.querySelectorAll('.level-option');
-    for (const option of options) {
-        option.addEventListener('click', () => {
-            const levelId = parseInt(option.dataset.level, 10);
-            selectLevel(levelId);
-            dropdown.classList.remove('open');
-        });
-    }
+function updateStageIndicator() {
+    const el = document.getElementById('stage-indicator');
+    if (el) el.textContent = `Stage ${getCurrentStage()}`;
 }
 
 // ============================================================================
@@ -723,7 +678,7 @@ async function fightAgainstOnlineOpponent(docId) {
     );
 
     if (success) {
-        arenaIsRankedFight = false;
+        startRecording();
         showDesignMode(false);
         updateFightButtonText();
     } else {
@@ -732,14 +687,59 @@ async function fightAgainstOnlineOpponent(docId) {
 }
 
 // ============================================================================
-// Auto-upload at end of fight
+// Auto-train and upload at end of fight
 // ============================================================================
 
+// Track current ship name for uploads (set from landing screen or preset load)
+let currentShipName = 'unnamed';
+
+// Auto-training config: fewer epochs for quick post-fight training
+const AUTO_TRAIN_EPOCHS = 15;
+
 /**
- * Uploads the current ship design + weights to Firestore.
- * Called automatically when exiting arena mode.
+ * Auto-trains the ML model from recorded fight data, then saves weights.
+ * Returns the trained model and config, or null if training failed.
+ * @returns {Promise<{model, config}|null>}
  */
-async function autoUploadFighter() {
+async function autoTrainFromRecording() {
+    const runs = getCompletedRuns();
+    if (runs.length === 0) {
+        console.log('No recorded data to train on');
+        return null;
+    }
+
+    const config = getDefaultConfig();
+    config.epochs = AUTO_TRAIN_EPOCHS;
+
+    let data;
+    try {
+        data = prepareTrainingData(runs, config.valRunFraction);
+    } catch (err) {
+        console.warn('Auto-train data error:', err.message);
+        return null;
+    }
+
+    const model = createModel(config);
+    try {
+        await trainModel(model, data, config);
+        await saveModelWeights(model, config);
+        console.log(`Auto-trained on ${data.train.numFrames} frames (${AUTO_TRAIN_EPOCHS} epochs)`);
+        return { model, config };
+    } catch (err) {
+        console.warn('Auto-train failed:', err.message);
+        model.dispose();
+        return null;
+    } finally {
+        disposeTrainingData(data);
+    }
+}
+
+/**
+ * Uploads the current ship design + freshly trained weights to Firestore.
+ * @param {number} stageNum - The stage to tag the upload with
+ * @param {{model, config}|null} trained - Result from autoTrainFromRecording
+ */
+async function uploadFighterForStage(stageNum, trained) {
     if (!isOnline()) return;
 
     const playerName = getPlayerName();
@@ -749,14 +749,11 @@ async function autoUploadFighter() {
     if (layout.length === 0) return;
 
     const shipName = currentShipName || getShipName() || 'unnamed';
-    const levelNum = gameState.selectedLevel;
 
-    // Try to export current model weights
     let weightData = null;
-    const loaded = await loadModelWeights();
-    if (loaded) {
+    if (trained) {
         try {
-            weightData = await exportModelAsJson(loaded.model, loaded.config);
+            weightData = await exportModelAsJson(trained.model, trained.config);
         } catch (err) {
             console.warn('Could not export weights for upload:', err.message);
         }
@@ -764,7 +761,7 @@ async function autoUploadFighter() {
 
     uploadFighter({
         shipName,
-        levelNum,
+        levelNum: stageNum,
         layout,
         topology: weightData?.topology ?? null,
         weightSpecs: weightData?.weightSpecs ?? null,
@@ -773,9 +770,6 @@ async function autoUploadFighter() {
         schemaVersion: weightData?.schemaVersion ?? null
     });
 }
-
-// Track current ship name for auto-upload (set from landing screen or preset load)
-let currentShipName = 'unnamed';
 
 /**
  * Loads a saved ship design onto the grid
@@ -869,34 +863,12 @@ async function fightAgainstSavedShip(shipId) {
     );
 
     if (success) {
-        arenaIsRankedFight = false;
+        startRecording();
         showDesignMode(false);
         updateFightButtonText();
     } else {
         opponentModel.dispose();
     }
-}
-
-/**
- * Selects a level and updates the UI
- * @param {number} levelId - Level ID (0 = free flight)
- */
-function selectLevel(levelId) {
-    gameState.selectedLevel = levelId;
-    
-    // Update button text
-    const btn = document.getElementById('level-selector-btn');
-    if (btn) {
-        if (levelId === 0) {
-            btn.textContent = 'Free Flight';
-        } else {
-            const levels = getLevelList();
-            const level = levels.find(l => l.id === levelId);
-            btn.textContent = level ? level.name : `Level ${levelId}`;
-        }
-    }
-    
-    console.log(`Selected level: ${levelId === 0 ? 'Free Flight' : levelId}`);
 }
 
 /**
@@ -969,29 +941,37 @@ function copyShipLayoutToClipboard() {
     });
 }
 
-// Track whether current arena session should auto-upload on exit
-let arenaIsRankedFight = false;
+// ============================================================================
+// Stage-based fight flow
+// ============================================================================
+
+// Whether the current arena session is a stage fight (vs. test/sandbox)
+let isStageFight = false;
+// The stage number for the current fight
+let currentFightStage = 0;
 
 /**
  * Exits arena mode and returns to design.
- * Auto-uploads only if this was a ranked fight (not a test).
+ * For non-stage fights (test arena, saved ship fights), just exits.
+ * Stage fights use outcome callbacks instead of this exit path.
  */
 function exitArenaMode() {
     if (!isArenaActive()) return;
 
-    if (arenaIsRankedFight) {
-        autoUploadFighter();
-    }
-    arenaIsRankedFight = false;
+    // Stop auto-recording if active
+    if (isRecording()) stopRecording();
 
+    isStageFight = false;
+    currentFightStage = 0;
+    hideFightOutcome();
     exitArena();
     showDesignMode(true);
     updateFightButtonText();
 }
 
 /**
- * FIGHT! button -- enters arena with current level, auto-uploads on exit.
- * If no level selected (Free Flight), prompts to pick a saved ship as opponent.
+ * FIGHT! button -- enters a stage fight against a Firebase opponent.
+ * Fetches a random opponent for the current stage, falls back to preset if none found.
  */
 async function enterFight() {
     if (isArenaActive()) {
@@ -1004,132 +984,26 @@ async function enterFight() {
         return;
     }
 
-    const level = gameState.selectedLevel;
-    console.log(`[Fight] Current level: ${level === 0 ? 'Free Flight' : level}`);
+    const stage = getCurrentStage();
+    currentFightStage = stage;
+    console.log(`[Fight] Entering Stage ${stage}...`);
 
-    // Level selected -- fight level enemies
-    if (level > 0) {
-        startRankedArena();
-        return;
-    }
+    // Try to fetch an opponent from Firebase for this stage
+    const opponent = await fetchFighterForStage(stage);
 
-    // No level -- pick a saved ship, or fall back to a random preset
-    const ships = await listSavedShips();
-    const opponents = ships.filter(s => s.hasWeights);
-    console.log(`[Fight] Found ${opponents.length} saved ship(s) with trained weights`);
-
-    if (opponents.length > 0) {
-        showOpponentPicker(opponents);
+    if (opponent) {
+        await startStageFightWithRecord(opponent);
     } else {
-        fightRandomPreset();
+        console.log(`No Stage ${stage} opponents found -- using preset fallback`);
+        startStageFightWithPreset();
     }
 }
 
 /**
- * Picks a random preset ship and fights it with a fresh (untrained) AI.
- * Used as a fallback when no saved ships are available.
+ * Starts a stage fight against a Firebase opponent record.
+ * @param {object} record - Full fighter document from Firestore
  */
-function fightRandomPreset() {
-    const presetNames = Object.keys(SHIP_PRESETS);
-    const pick = presetNames[Math.floor(Math.random() * presetNames.length)];
-    const opponentLayout = SHIP_PRESETS[pick];
-    const opponentPieces = createPiecesFromLayout(opponentLayout);
-
-    if (opponentPieces.length === 0) {
-        console.error('Failed to create opponent from preset:', pick);
-        return;
-    }
-
-    // Fresh untrained model -- opponent will flail randomly
-    const config = getDefaultConfig();
-    const opponentModel = createModel(config);
-
-    const playerPieces = createPiecesFromLayout(getShipLayout());
-    if (playerPieces.length === 0) {
-        console.log('Place some pieces on the grid first');
-        opponentModel.dispose();
-        return;
-    }
-
-    const scene = getScene();
-    const camera = getCamera();
-    const renderer = getRenderer();
-
-    const success = enterArenaWithOpponent(
-        playerPieces, opponentPieces, opponentModel,
-        scene, camera, renderer, screenToWorld
-    );
-
-    if (success) {
-        arenaIsRankedFight = false; // No level = no upload
-        showDesignMode(false);
-        updateFightButtonText();
-        console.log(`Fighting random preset: ${pick} (untrained AI)`);
-    } else {
-        opponentModel.dispose();
-    }
-}
-
-/**
- * Enters a ranked arena fight against level enemies.
- */
-function startRankedArena() {
-    const scene = getScene();
-    const camera = getCamera();
-    const renderer = getRenderer();
-    const playerPieces = createPiecesFromLayout(getShipLayout());
-
-    const success = enterArenaLevel(
-        gameState.selectedLevel,
-        playerPieces,
-        scene, camera, renderer,
-        screenToWorld, getPresetPieces
-    );
-
-    if (success) {
-        arenaIsRankedFight = true;
-        showDesignMode(false);
-        updateFightButtonText();
-    }
-}
-
-/**
- * Shows a quick picker dialog to choose a saved ship as opponent for FIGHT.
- * @param {Array} opponents - Saved ships that have trained weights
- */
-function showOpponentPicker(opponents) {
-    // Reuse the save-ship-dialog structure for the picker
-    const dialog = document.getElementById('fight-picker-dialog');
-    if (!dialog) return;
-
-    const list = document.getElementById('fight-picker-list');
-    list.innerHTML = '';
-
-    for (const ship of opponents) {
-        const row = document.createElement('button');
-        row.className = 'ship-option';
-        row.textContent = ship.shipName;
-        row.addEventListener('click', async () => {
-            dialog.classList.add('hidden');
-            await startRankedFightAgainst(ship.id);
-        });
-        list.appendChild(row);
-    }
-
-    dialog.classList.remove('hidden');
-}
-
-/**
- * Starts a ranked fight against a saved ship (auto-uploads on exit).
- * @param {number} shipId - Saved ship record ID
- */
-async function startRankedFightAgainst(shipId) {
-    const record = await loadSavedShip(shipId);
-    if (!record || !record.weightsBase64 || !record.topology) {
-        console.error('Ship has no trained weights to fight against');
-        return;
-    }
-
+async function startStageFightWithRecord(record) {
     let opponentModel;
     try {
         const result = await importModelFromJson({
@@ -1142,6 +1016,8 @@ async function startRankedFightAgainst(shipId) {
         opponentModel = result.model;
     } catch (err) {
         console.error('Failed to load opponent model:', err.message);
+        console.log('Falling back to preset opponent');
+        startStageFightWithPreset();
         return;
     }
 
@@ -1154,27 +1030,142 @@ async function startRankedFightAgainst(shipId) {
 
     const opponentPieces = createPiecesFromLayout(record.layout);
     if (opponentPieces.length === 0) {
-        console.error('Saved ship layout is empty');
+        console.error('Opponent ship layout is empty');
         opponentModel.dispose();
         return;
     }
 
-    const scene = getScene();
-    const camera = getCamera();
-    const renderer = getRenderer();
-
     const success = enterArenaWithOpponent(
         playerPieces, opponentPieces, opponentModel,
-        scene, camera, renderer, screenToWorld
+        getScene(), getCamera(), getRenderer(), screenToWorld
     );
 
     if (success) {
-        arenaIsRankedFight = false; // No level = no upload key
+        isStageFight = true;
+        wireStageOutcomeCallbacks();
+        startRecording();
         showDesignMode(false);
         updateFightButtonText();
+        console.log(`Stage ${currentFightStage}: Fighting ${record.playerName}'s ${record.shipName}`);
     } else {
         opponentModel.dispose();
     }
+}
+
+/**
+ * Starts a stage fight against a random preset ship (fallback when no opponents).
+ */
+function startStageFightWithPreset() {
+    const presetNames = Object.keys(SHIP_PRESETS);
+    const pick = presetNames[Math.floor(Math.random() * presetNames.length)];
+    const opponentPieces = createPiecesFromLayout(SHIP_PRESETS[pick]);
+
+    if (opponentPieces.length === 0) {
+        console.error('Failed to create opponent from preset:', pick);
+        return;
+    }
+
+    const opponentModel = createModel(getDefaultConfig());
+
+    const playerPieces = createPiecesFromLayout(getShipLayout());
+    if (playerPieces.length === 0) {
+        console.log('Place some pieces on the grid first');
+        opponentModel.dispose();
+        return;
+    }
+
+    const success = enterArenaWithOpponent(
+        playerPieces, opponentPieces, opponentModel,
+        getScene(), getCamera(), getRenderer(), screenToWorld
+    );
+
+    if (success) {
+        isStageFight = true;
+        wireStageOutcomeCallbacks();
+        startRecording();
+        showDesignMode(false);
+        updateFightButtonText();
+        console.log(`Stage ${currentFightStage}: Fighting preset ${pick} (fallback)`);
+    } else {
+        opponentModel.dispose();
+    }
+}
+
+/**
+ * Wires up the win/loss callbacks for a stage fight.
+ * On fight end: stop recording -> show spinner -> auto-train -> show result.
+ */
+function wireStageOutcomeCallbacks() {
+    setOutcomeCallbacks(
+        () => handleStageFightEnd('won'),
+        () => handleStageFightEnd('lost')
+    );
+}
+
+/**
+ * Handles the end of a stage fight (win or lose).
+ * Stops recording, auto-trains, and shows the appropriate overlay.
+ * @param {'won'|'lost'} outcome
+ */
+async function handleStageFightEnd(outcome) {
+    const stage = currentFightStage;
+
+    // Stop recording player actions
+    if (isRecording()) stopRecording();
+
+    // Show training spinner
+    showTrainingSpinner();
+
+    // Auto-train from this fight's recorded data
+    const trained = await autoTrainFromRecording();
+
+    // Clean up recorded runs (already trained, don't accumulate indefinitely)
+    clearRuns();
+
+    // Exit the arena (clears physics, ships, etc.)
+    exitArena();
+
+    if (outcome === 'won') {
+        // Upload fighter for this stage
+        if (trained) {
+            await uploadFighterForStage(stage, trained);
+            trained.model.dispose();
+        }
+        advanceStage();
+        updateStageIndicator();
+
+        showVictory(stage, {
+            onNextStage: () => {
+                showDesignMode(true);
+                updateFightButtonText();
+                // Immediately start next stage fight
+                enterFight();
+            },
+            onBackToDesigner: () => {
+                showDesignMode(true);
+                updateFightButtonText();
+            }
+        });
+    } else {
+        // Still dispose trained model on loss
+        if (trained) trained.model.dispose();
+
+        showDefeat(stage, {
+            onRetry: () => {
+                showDesignMode(true);
+                updateFightButtonText();
+                // Retry the same stage
+                enterFight();
+            },
+            onBackToDesigner: () => {
+                showDesignMode(true);
+                updateFightButtonText();
+            }
+        });
+    }
+
+    isStageFight = false;
+    currentFightStage = 0;
 }
 
 /**
@@ -1205,7 +1196,6 @@ function enterTestArena() {
     );
 
     if (success) {
-        arenaIsRankedFight = false;
         showDesignMode(false);
         updateFightButtonText();
     }
@@ -1218,7 +1208,7 @@ function updateFightButtonText() {
     const fightBtn = document.getElementById('fight-btn');
     const testBtn = document.getElementById('test-arena-btn');
     if (fightBtn) fightBtn.textContent = isArenaActive() ? 'Exit' : 'FIGHT!';
-    if (testBtn) testBtn.textContent = isArenaActive() ? 'Exit' : 'Test Arena';
+    if (testBtn) testBtn.textContent = isArenaActive() ? 'Exit' : 'Free Flight';
 }
 
 /**
@@ -1252,12 +1242,12 @@ function showDesignMode(visible) {
     }
     
     // Hide/show design-only toolbar elements
-    const levelSelector = document.querySelector('.level-selector');
+    const stageIndicator = document.getElementById('stage-indicator');
     const saveBtn = document.getElementById('save-ship-btn');
     const myShips = document.getElementById('my-ships-selector');
     const opponents = document.getElementById('opponents-selector');
     const devToolbar = document.getElementById('dev-toolbar');
-    if (levelSelector) levelSelector.style.display = visible ? '' : 'none';
+    if (stageIndicator) stageIndicator.style.display = visible ? '' : 'none';
     if (saveBtn) saveBtn.style.display = visible ? '' : 'none';
     if (myShips) myShips.style.display = visible ? '' : 'none';
     if (opponents) opponents.style.display = visible ? '' : 'none';
