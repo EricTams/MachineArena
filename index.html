@@ -260,8 +260,8 @@
             color: #1a202c;
         }
         
-        /* Loading Screen */
-        #loading-screen {
+        /* Landing Screen */
+        #landing-screen {
             position: fixed;
             top: 0;
             left: 0;
@@ -272,52 +272,109 @@
             flex-direction: column;
             justify-content: center;
             align-items: center;
-            z-index: 1000;
-            transition: opacity 0.3s ease-out;
-        }
-        #loading-screen.hidden {
-            opacity: 0;
-            pointer-events: none;
-        }
-        
-        /* Name Prompt Overlay */
-        #name-prompt {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(10, 10, 25, 0.95);
-            display: flex;
-            flex-direction: column;
-            justify-content: center;
-            align-items: center;
             z-index: 2000;
-            transition: opacity 0.3s ease-out;
+            transition: opacity 0.4s ease-out;
         }
-        #name-prompt.hidden {
+        #landing-screen.hidden {
             opacity: 0;
             pointer-events: none;
         }
-        #name-prompt-title {
+        #landing-title {
             font-family: 'Segoe UI', sans-serif;
-            font-size: 16px;
-            color: #a0aec0;
-            margin-bottom: 12px;
+            font-size: 36px;
+            font-weight: 700;
+            color: #ffcc00;
+            margin-bottom: 8px;
+            letter-spacing: 1px;
+        }
+        #landing-subtitle {
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 14px;
+            color: #718096;
+            margin-bottom: 40px;
+        }
+        /* Callsign section */
+        #landing-callsign-label {
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 12px;
+            color: #718096;
             text-transform: uppercase;
             letter-spacing: 2px;
+            margin-bottom: 6px;
         }
-        #name-prompt-name {
+        #landing-callsign {
             font-family: 'Segoe UI', sans-serif;
-            font-size: 32px;
-            color: #ffcc00;
-            margin-bottom: 28px;
+            font-size: 26px;
+            color: #e2e8f0;
+            margin-bottom: 8px;
             text-align: center;
-            min-height: 44px;
+            min-height: 36px;
         }
-        #name-prompt-buttons {
+        #landing-reroll-btn {
+            padding: 4px 14px;
+            background: none;
+            border: 1px solid #4a5568;
+            border-radius: 3px;
+            color: #a0aec0;
+            cursor: pointer;
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 12px;
+            margin-bottom: 36px;
+            transition: border-color 0.15s;
+        }
+        #landing-reroll-btn:hover {
+            border-color: #718096;
+            color: #e2e8f0;
+        }
+        /* Connection status */
+        #landing-status {
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 13px;
+            color: #718096;
+            margin-bottom: 24px;
             display: flex;
-            gap: 12px;
+            align-items: center;
+            gap: 8px;
+        }
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+        }
+        .status-dot.online { background: #48bb78; }
+        .status-dot.offline { background: #a0aec0; }
+        .status-dot.connecting { background: #ecc94b; }
+        /* Start button */
+        .landing-btn {
+            padding: 12px 36px;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 16px;
+            font-weight: 600;
+            transition: background 0.15s, transform 0.1s;
+        }
+        .landing-btn:active {
+            transform: scale(0.97);
+        }
+        .landing-btn.primary {
+            background: linear-gradient(135deg, #ffcc00, #ff9900);
+            color: #1a1a2e;
+        }
+        .landing-btn.primary:hover {
+            background: linear-gradient(135deg, #ffd633, #ffaa22);
+        }
+        /* Loading bar (inside landing screen) */
+        #landing-loading {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            gap: 10px;
+        }
+        #landing-loading.active {
+            display: flex;
         }
         .name-btn {
             padding: 10px 28px;
@@ -527,23 +584,28 @@
         </div>
     </div>
     
-    <!-- Name Prompt (shown on first visit) -->
-    <div id="name-prompt" class="hidden">
-        <div id="name-prompt-title">Your Callsign</div>
-        <div id="name-prompt-name"></div>
-        <div id="name-prompt-buttons">
-            <button class="name-btn reroll" id="name-reroll-btn">Reroll</button>
-            <button class="name-btn accept" id="name-accept-btn">Accept</button>
+    <!-- Landing Screen (always shown on load) -->
+    <div id="landing-screen">
+        <div id="landing-title">Machine Arena</div>
+        <div id="landing-subtitle">Design. Train. Fight.</div>
+        
+        <div id="landing-callsign-label">Your Callsign</div>
+        <div id="landing-callsign"></div>
+        <button id="landing-reroll-btn">Reroll</button>
+        
+        <div id="landing-status">
+            <span class="status-dot connecting"></span>
+            <span id="landing-status-text">Checking connection...</span>
         </div>
-    </div>
-    
-    <!-- Loading Screen -->
-    <div id="loading-screen">
-        <div id="loading-title">Machine Arena</div>
-        <div id="loading-bar-container">
-            <div id="loading-bar"></div>
+        
+        <button class="landing-btn primary" id="landing-start-btn" style="display:none;">Start</button>
+        
+        <div id="landing-loading">
+            <div id="loading-bar-container">
+                <div id="loading-bar"></div>
+            </div>
+            <div id="loading-status">Initializing...</div>
         </div>
-        <div id="loading-status">Initializing...</div>
     </div>
     
     <canvas id="game-canvas"></canvas>

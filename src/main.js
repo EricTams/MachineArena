@@ -26,23 +26,20 @@ const gameState = {
     selectedLevel: 0   // 0 = free flight, 1+ = level IDs
 };
 
-// Loading bar helpers
+// Landing screen and loading bar helpers
+const landingScreen = document.getElementById('landing-screen');
 const loadingBar = document.getElementById('loading-bar');
 const loadingStatus = document.getElementById('loading-status');
-const loadingScreen = document.getElementById('loading-screen');
 
 function updateLoading(percent, status) {
     if (loadingBar) loadingBar.style.width = `${percent}%`;
     if (loadingStatus) loadingStatus.textContent = status;
 }
 
-function hideLoading() {
-    if (loadingScreen) {
-        loadingScreen.classList.add('hidden');
-        // Remove from DOM after transition
-        setTimeout(() => {
-            loadingScreen.remove();
-        }, 300);
+function hideLandingScreen() {
+    if (landingScreen) {
+        landingScreen.classList.add('hidden');
+        setTimeout(() => landingScreen.remove(), 400);
     }
 }
 
@@ -147,44 +144,65 @@ function spawnDefaultShip(gameState) {
 }
 
 /**
- * Shows the name prompt overlay if this is the player's first visit.
- * Returns immediately if a name is already stored.
- * @returns {Promise<void>}
+ * Shows the landing screen and waits for the player to click Start.
+ * Handles first-visit name generation and connection status display.
+ * @returns {Promise<void>} Resolves when the player clicks Start
  */
-function showNamePromptIfNeeded() {
-    if (!needsPlayerName()) return Promise.resolve();
-
+function showLandingScreen() {
     return new Promise(resolve => {
-        const overlay = document.getElementById('name-prompt');
-        const nameEl = document.getElementById('name-prompt-name');
-        const rerollBtn = document.getElementById('name-reroll-btn');
-        const acceptBtn = document.getElementById('name-accept-btn');
-        if (!overlay || !nameEl || !rerollBtn || !acceptBtn) {
+        const callsignEl = document.getElementById('landing-callsign');
+        const rerollBtn = document.getElementById('landing-reroll-btn');
+        const startBtn = document.getElementById('landing-start-btn');
+        const statusDot = document.querySelector('#landing-status .status-dot');
+        const statusText = document.getElementById('landing-status-text');
+
+        if (!callsignEl || !startBtn) {
             resolve();
             return;
         }
 
-        let currentName = generateName();
-        nameEl.textContent = currentName;
-        overlay.classList.remove('hidden');
+        // Set up callsign: load existing or generate new
+        let currentName = getPlayerName() || generateName();
+        callsignEl.textContent = currentName;
 
+        // Reroll generates a new name (even for returning players)
         rerollBtn.addEventListener('click', () => {
             currentName = generateName();
-            nameEl.textContent = currentName;
+            callsignEl.textContent = currentName;
         });
 
-        acceptBtn.addEventListener('click', () => {
+        // Check Firebase connection status
+        initFirebase();
+        if (isOnline()) {
+            statusDot.className = 'status-dot online';
+            statusText.textContent = 'Online - fighters will sync';
+        } else {
+            statusDot.className = 'status-dot offline';
+            statusText.textContent = 'Offline - play locally';
+        }
+
+        // Show start button
+        startBtn.style.display = '';
+        startBtn.textContent = isOnline() ? 'Start' : 'Start Offline';
+
+        // Start button: save name and begin loading
+        startBtn.addEventListener('click', () => {
             setPlayerName(currentName);
-            overlay.classList.add('hidden');
-            setTimeout(() => overlay.remove(), 300);
+            startBtn.style.display = 'none';
+            rerollBtn.style.display = 'none';
+
+            // Show loading bar
+            const loadingEl = document.getElementById('landing-loading');
+            if (loadingEl) loadingEl.classList.add('active');
+
             resolve();
         });
     });
 }
 
 async function init() {
-    // Show name prompt on first visit (before loading)
-    await showNamePromptIfNeeded();
+    // Show landing screen and wait for Start
+    await showLandingScreen();
 
     const canvas = document.getElementById('game-canvas');
     
@@ -247,15 +265,12 @@ async function init() {
         setupSaveShipButton();
         setupMyShipsDropdown();
         setupOpponentsDropdown();
-        
-        // Initialize Firebase (silently no-ops if not configured)
-        initFirebase();
     });
     
-    // All done - hide loading and start game
+    // All done - hide landing screen and start game
     updateLoading(100, 'Ready!');
     setTimeout(() => {
-        hideLoading();
+        hideLandingScreen();
         requestAnimationFrame(gameLoop);
     }, 150);
 }
