@@ -17,7 +17,7 @@
         #game-canvas {
             display: block;
         }
-        /* Top toolbar */
+        /* Top toolbar (main gameplay) */
         #toolbar {
             position: fixed;
             top: 10px;
@@ -50,6 +50,30 @@
         }
         .toolbar-btn.primary:active {
             background: #2f8a5a;
+        }
+        
+        /* Dev toolbar (debug/testing) */
+        #dev-toolbar {
+            position: fixed;
+            bottom: 10px;
+            right: 10px;
+            display: flex;
+            gap: 6px;
+            z-index: 100;
+        }
+        .dev-btn {
+            padding: 5px 10px;
+            background: rgba(74, 85, 104, 0.5);
+            color: #718096;
+            border: 1px solid rgba(74, 85, 104, 0.4);
+            border-radius: 3px;
+            cursor: pointer;
+            font-family: sans-serif;
+            font-size: 11px;
+        }
+        .dev-btn:hover {
+            background: rgba(74, 85, 104, 0.8);
+            color: #a0aec0;
         }
         
         /* Ship selector dropdown */
@@ -630,17 +654,8 @@
     
     <canvas id="game-canvas"></canvas>
     
-    <!-- Top toolbar -->
+    <!-- Main toolbar (gameplay) -->
     <div id="toolbar">
-        <div class="ship-selector">
-            <button class="toolbar-btn ship-selector-btn" id="ship-selector-btn">Load Ship</button>
-            <div class="ship-dropdown" id="ship-dropdown">
-                <button class="ship-option" data-ship="starter">Starter</button>
-                <button class="ship-option" data-ship="gunboat">Gunboat</button>
-                <button class="ship-option" data-ship="speeder">Speeder</button>
-                <button class="ship-option" data-ship="tank">Tank</button>
-            </div>
-        </div>
         <div class="level-selector">
             <button class="toolbar-btn level-selector-btn" id="level-selector-btn">Free Flight</button>
             <div class="level-dropdown" id="level-dropdown">
@@ -648,6 +663,8 @@
                 <button class="level-option" data-level="1">Level 1: Speeder</button>
             </div>
         </div>
+        <button class="toolbar-btn primary" id="test-arena-btn">Test Arena</button>
+        <button class="toolbar-btn" id="save-ship-btn">Save Ship</button>
         <div class="ship-selector" id="my-ships-selector">
             <button class="toolbar-btn ship-selector-btn" id="my-ships-btn">My Ships</button>
             <div class="ship-dropdown" id="my-ships-dropdown"></div>
@@ -656,9 +673,20 @@
             <button class="toolbar-btn ship-selector-btn" id="opponents-btn">Opponents</button>
             <div class="ship-dropdown" id="opponents-dropdown" style="min-width: 240px;"></div>
         </div>
-        <button class="toolbar-btn" id="save-ship-btn">Save Ship</button>
-        <button class="toolbar-btn" id="copy-layout-btn">Copy Layout</button>
-        <button class="toolbar-btn primary" id="test-arena-btn">Test Arena</button>
+    </div>
+    
+    <!-- Dev toolbar (debug/testing, bottom-right) -->
+    <div id="dev-toolbar">
+        <div class="ship-selector">
+            <button class="dev-btn ship-selector-btn" id="ship-selector-btn">Load Preset</button>
+            <div class="ship-dropdown" id="ship-dropdown">
+                <button class="ship-option" data-ship="starter">Starter</button>
+                <button class="ship-option" data-ship="gunboat">Gunboat</button>
+                <button class="ship-option" data-ship="speeder">Speeder</button>
+                <button class="ship-option" data-ship="tank">Tank</button>
+            </div>
+        </div>
+        <button class="dev-btn" id="copy-layout-btn">Copy Layout</button>
     </div>
     
     <div id="stats-panel"></div>

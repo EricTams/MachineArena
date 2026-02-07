@@ -1036,18 +1036,16 @@ function showDesignMode(visible) {
     }
     
     // Hide/show design-only toolbar elements
-    const shipSelector = document.querySelector('.ship-selector');
     const levelSelector = document.querySelector('.level-selector');
-    const copyBtn = document.getElementById('copy-layout-btn');
     const saveBtn = document.getElementById('save-ship-btn');
     const myShips = document.getElementById('my-ships-selector');
     const opponents = document.getElementById('opponents-selector');
-    if (shipSelector) shipSelector.style.display = visible ? '' : 'none';
+    const devToolbar = document.getElementById('dev-toolbar');
     if (levelSelector) levelSelector.style.display = visible ? '' : 'none';
-    if (copyBtn) copyBtn.style.display = visible ? '' : 'none';
     if (saveBtn) saveBtn.style.display = visible ? '' : 'none';
     if (myShips) myShips.style.display = visible ? '' : 'none';
     if (opponents) opponents.style.display = visible ? '' : 'none';
+    if (devToolbar) devToolbar.style.display = visible ? '' : 'none';
 }
 
 let lastTime = 0;
