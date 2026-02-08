@@ -488,12 +488,15 @@ function updateArena(deltaTime) {
     // Compute sensing state for player ship (for ML training data)
     if (arenaState.playerShip && !arenaState.playerShip.destroyed) {
         const projectiles = getProjectiles();
+        // Pass mousePos as engagement target so sensing selects the enemy
+        // the player is aiming at (for single engaged enemy slot)
         arenaState.sensingState = computeSensingState(
             arenaState.playerShip,
             arenaState.ships,
             arenaState.hazards,
             arenaState.blockers,
-            projectiles
+            projectiles,
+            mousePos
         );
         
         // Update sensing debug visualization (pass ships for lead indicator)
@@ -797,6 +800,24 @@ function isAiControlled() {
  * @returns {boolean} Whether arena was entered successfully
  */
 function enterArenaWithOpponent(playerPieces, opponentPieces, opponentModel, scene, camera, renderer, screenToWorld, arenaType = 'random') {
+    const mlController = createMlController(opponentModel);
+    return enterArenaWithController(playerPieces, opponentPieces, mlController, scene, camera, renderer, screenToWorld, arenaType);
+}
+
+/**
+ * Enters arena with a specific opponent ship controlled by any controller.
+ * Generalized version that accepts any controller type (ML, random, etc.)
+ * @param {Array} playerPieces - Player's ship pieces
+ * @param {Array} opponentPieces - Opponent's ship pieces
+ * @param {object} opponentController - Controller for the opponent ship
+ * @param {THREE.Scene} scene - The Three.js scene
+ * @param {THREE.Camera} camera - The camera
+ * @param {THREE.Renderer} renderer - The renderer
+ * @param {function} screenToWorld - Screen to world conversion function
+ * @param {string} arenaType - Arena type key ('base', 'saw', 'energy', or 'random')
+ * @returns {boolean} Whether arena was entered successfully
+ */
+function enterArenaWithController(playerPieces, opponentPieces, opponentController, scene, camera, renderer, screenToWorld, arenaType = 'random') {
     if (arenaState.active) {
         console.warn('Already in arena mode');
         return false;
@@ -811,7 +832,7 @@ function enterArenaWithOpponent(playerPieces, opponentPieces, opponentModel, sce
     const { config } = resolveArenaType(arenaType);
     currentArenaConfig = config;
 
-    console.log(`Entering arena - ${config.name} - Fight Against saved opponent...`);
+    console.log(`Entering arena - ${config.name} - Fight Against opponent...`);
 
     arenaState.scene = scene;
     arenaState.camera = camera;
@@ -848,13 +869,12 @@ function enterArenaWithOpponent(playerPieces, opponentPieces, opponentModel, sce
     arenaState.ships.push(arenaState.playerShip);
     scene.add(arenaState.playerShip.mesh);
 
-    // Create opponent ship with ML controller
-    const mlController = createMlController(opponentModel);
+    // Create opponent ship with provided controller
     const opponentShip = createArenaShip(opponentPieces, {
         team: 2,
         spawnX: 0,
         spawnY: 15,
-        controller: mlController
+        controller: opponentController
     });
 
     if (opponentShip) {
@@ -914,6 +934,7 @@ export {
     enterArena,
     enterArenaLevel,
     enterArenaWithOpponent,
+    enterArenaWithController,
     exitArena,
     updateArena,
     isArenaActive,

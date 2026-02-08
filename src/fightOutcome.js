@@ -15,7 +15,7 @@ let stylesInjected = false;
 // ============================================================================
 
 /**
- * Shows the "Training AI..." spinner overlay.
+ * Shows the "Training AI..." spinner overlay with a progress bar.
  * Call this immediately when the fight ends, before training starts.
  */
 function showTrainingSpinner() {
@@ -24,9 +24,33 @@ function showTrainingSpinner() {
         <div class="fo-box">
             <div class="fo-spinner"></div>
             <div class="fo-training-text">Training AI...</div>
+            <div class="fo-progress-wrap">
+                <div class="fo-progress-track">
+                    <div class="fo-progress-bar" id="fo-progress-bar"></div>
+                </div>
+                <div class="fo-progress-label" id="fo-progress-label">Preparing data...</div>
+            </div>
         </div>
     `;
     overlayEl.classList.remove('hidden');
+}
+
+/**
+ * Updates the training progress bar.
+ * @param {number} epoch - Current epoch (0-based)
+ * @param {number} totalEpochs - Total number of epochs
+ * @param {number} [loss] - Current training loss (optional)
+ */
+function updateTrainingProgress(epoch, totalEpochs, loss) {
+    const bar = document.getElementById('fo-progress-bar');
+    const label = document.getElementById('fo-progress-label');
+    if (!bar || !label) return;
+
+    const pct = Math.round(((epoch + 1) / totalEpochs) * 100);
+    bar.style.width = `${pct}%`;
+
+    const lossStr = loss != null ? ` · loss ${loss.toFixed(4)}` : '';
+    label.textContent = `Epoch ${epoch + 1} / ${totalEpochs}${lossStr}`;
 }
 
 /**
@@ -185,12 +209,39 @@ function injectStyles() {
             font-size: 18px;
             color: #a0aec0;
         }
+        .fo-progress-wrap {
+            margin-top: 20px;
+            width: 260px;
+            margin-left: auto;
+            margin-right: auto;
+        }
+        .fo-progress-track {
+            width: 100%;
+            height: 8px;
+            background: #2d3748;
+            border-radius: 4px;
+            overflow: hidden;
+        }
+        .fo-progress-bar {
+            height: 100%;
+            width: 0%;
+            background: linear-gradient(90deg, #ffcc00, #ff9900);
+            border-radius: 4px;
+            transition: width 0.15s ease-out;
+        }
+        .fo-progress-label {
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 12px;
+            color: #718096;
+            margin-top: 8px;
+        }
     `;
     document.head.appendChild(style);
 }
 
 export {
     showTrainingSpinner,
+    updateTrainingProgress,
     showVictory,
     showDefeat,
     hideFightOutcome

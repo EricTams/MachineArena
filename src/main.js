@@ -7,19 +7,20 @@ import { createBin, syncBinPiecesToPhysics, getBinGroup } from './bin.js';
 import { setupInput } from './input.js';
 import { spawnInitialParts, removePiece } from './pieces/piece.js';
 import { initDebug, updateDebug } from './debug.js';
-import { enterArena, enterArenaWithOpponent, exitArena, updateArena, isArenaActive, resizeArena, setOutcomeCallbacks } from './arena/arena.js';
+import { enterArena, enterArenaWithOpponent, enterArenaWithController, exitArena, updateArena, isArenaActive, resizeArena, setOutcomeCallbacks, switchToAiControl } from './arena/arena.js';
+import { createRandomController } from './arena/controllers.js';
 import { initStatsPanel, hideStats } from './statsPanel.js';
 import { setShipLayout, getShipLayout, clearGridPieces, createPiecesFromLayout } from './layout.js';
 import { generateName, setPlayerName, getPlayerName, setShipName, getShipName, needsPlayerName } from './naming.js';
 import { saveShip, listSavedShips, loadSavedShip, deleteSavedShip } from './shipPersistence.js';
 import {
-    importModelFromJson, exportModelAsJson, saveModelWeights, loadModelWeights,
+    importModelFromJson, exportModelAsJson, saveModelWeights, loadModelWeights, getModelStats,
     createModel, getDefaultConfig, prepareTrainingData, trainModel, disposeTrainingData
 } from './ml/model.js';
 import { startRecording, stopRecording, isRecording, getCompletedRuns, clearRuns } from './ml/recording.js';
 import { initFirebase, isOnline, uploadFighter, fetchFighters, fetchFighter, fetchFighterForStage } from './firebase.js';
 import { getCurrentStage, advanceStage, retreatStage } from './stages.js';
-import { showTrainingSpinner, showVictory, showDefeat, hideFightOutcome } from './fightOutcome.js';
+import { showTrainingSpinner, updateTrainingProgress, showVictory, showDefeat, hideFightOutcome } from './fightOutcome.js';
 
 // Game state
 const gameState = {
@@ -44,6 +45,17 @@ function hideLandingScreen() {
     if (landingScreen) {
         landingScreen.classList.add('hidden');
         setTimeout(() => landingScreen.remove(), 400);
+    }
+}
+
+/**
+ * Reveals all game UI elements that were hidden during loading.
+ */
+function showGameUI() {
+    const ids = ['game-canvas', 'toolbar', 'dev-toolbar', 'tips-panel', 'copy-layout-icon'];
+    for (const id of ids) {
+        const el = document.getElementById(id);
+        if (el) el.style.display = '';
     }
 }
 
@@ -159,12 +171,18 @@ function spawnDefaultShip(gameState) {
 }
 
 /**
- * Shows the landing screen and waits for the player to click Start.
- * Handles first-visit name generation and connection status display.
+ * Shows the callsign screen (after loading is complete) and waits for Start.
+ * Hides the loading bar, reveals the name/ship form.
  * @returns {Promise<void>} Resolves when the player clicks Start
  */
 function showLandingScreen() {
     return new Promise(resolve => {
+        // Hide loading bar, show callsign content
+        const loadingEl = document.getElementById('landing-loading');
+        const contentEl = document.getElementById('landing-content');
+        if (loadingEl) loadingEl.classList.remove('active');
+        if (contentEl) contentEl.classList.add('active');
+
         const playerNameInput = document.getElementById('landing-player-name');
         const shipNameEl = document.getElementById('landing-ship-name');
         const rerollBtn = document.getElementById('landing-reroll-btn');
@@ -190,8 +208,7 @@ function showLandingScreen() {
             shipNameEl.textContent = currentShip;
         });
 
-        // Check Firebase connection status
-        initFirebase();
+        // Firebase was already initialized during loading
         if (isOnline()) {
             statusDot.className = 'status-dot online';
             statusText.textContent = 'Online - fighters will sync';
@@ -200,11 +217,12 @@ function showLandingScreen() {
             statusText.textContent = 'Offline - play locally';
         }
 
-        // Show start button
-        startBtn.style.display = '';
         startBtn.textContent = isOnline() ? 'Start' : 'Start Offline';
 
-        // Start button: validate, save names, begin loading
+        // Focus the name input
+        playerNameInput.focus();
+
+        // Start button: validate, save names, go straight to designer
         startBtn.addEventListener('click', () => {
             const playerName = playerNameInput.value.trim();
             if (!playerName) {
@@ -217,12 +235,6 @@ function showLandingScreen() {
             setShipName(currentShip);
             currentShipName = currentShip;
 
-            startBtn.style.display = 'none';
-            rerollBtn.style.display = 'none';
-
-            const loadingEl = document.getElementById('landing-loading');
-            if (loadingEl) loadingEl.classList.add('active');
-
             resolve();
         });
 
@@ -234,9 +246,7 @@ function showLandingScreen() {
 }
 
 async function init() {
-    // Show landing screen and wait for Start
-    await showLandingScreen();
-
+    // Loading starts immediately — bar is already visible
     const canvas = document.getElementById('game-canvas');
     
     // Helper to update loading and yield to browser
@@ -280,6 +290,10 @@ async function init() {
         initStatsPanel();
     });
     
+    await step(90, 'Connecting...', () => {
+        initFirebase();
+    });
+    
     await step(95, 'Finishing up...', () => {
         // Handle window resize
         window.addEventListener('resize', () => {
@@ -293,21 +307,23 @@ async function init() {
         // Setup UI buttons
         setupCopyLayoutButton();
         setupFightButton();
-        setupTestArenaButton();
+        setupCustomFightButton();
         setupShipSelector();
         setupSaveShipButton();
         setupMyShipsDropdown();
-        setupOpponentsDropdown();
         setupTipsDismiss();
         updateStageIndicator();
     });
     
-    // All done - hide landing screen and start game
+    // Loading complete — show callsign screen and wait for Start
     updateLoading(100, 'Ready!');
-    setTimeout(() => {
-        hideLandingScreen();
-        requestAnimationFrame(gameLoop);
-    }, 150);
+    await showLandingScreen();
+    
+    // Start clicked — instantly reveal game UI and begin
+    showGameUI();
+    hideLandingScreen();
+    refreshAiStatusIndicator();
+    requestAnimationFrame(gameLoop);
 }
 
 /**
@@ -331,10 +347,10 @@ function setupTipsDismiss() {
 }
 
 /**
- * Sets up the copy layout button
+ * Sets up the copy layout button (icon near grid)
  */
 function setupCopyLayoutButton() {
-    const btn = document.getElementById('copy-layout-btn');
+    const btn = document.getElementById('copy-layout-icon');
     if (!btn) return;
     
     btn.addEventListener('click', () => {
@@ -350,13 +366,373 @@ function setupFightButton() {
     if (btn) btn.addEventListener('click', () => enterFight());
 }
 
+// ============================================================================
+// AI Status Indicator
+// ============================================================================
+
 /**
- * Sets up the Test Arena button (dev/sandbox)
+ * Refreshes the AI training status indicator below the grid.
+ * Shows "AI: not trained" or "AI: 450 frames trained".
  */
-function setupTestArenaButton() {
-    const btn = document.getElementById('test-arena-btn');
-    if (!btn) return;
-    btn.addEventListener('click', () => enterTestArena());
+async function refreshAiStatusIndicator() {
+    const indicator = document.getElementById('ai-status-indicator');
+    const textEl = document.getElementById('ai-status-text');
+    if (!indicator || !textEl) return;
+
+    const stats = await getModelStats();
+    if (stats) {
+        if (stats.totalFramesTrained > 0) {
+            textEl.textContent = `AI: ${stats.totalFramesTrained} frames trained`;
+        } else {
+            // Legacy model without frame tracking
+            textEl.textContent = 'AI: trained';
+        }
+        indicator.classList.add('has-model');
+    } else {
+        textEl.textContent = 'AI: not trained';
+        indicator.classList.remove('has-model');
+    }
+}
+
+// ============================================================================
+// Custom Fight Setup
+// ============================================================================
+
+/**
+ * Sets up the Custom Fight button in the top toolbar
+ */
+function setupCustomFightButton() {
+    const btn = document.getElementById('custom-fight-btn');
+    if (btn) btn.addEventListener('click', () => showCustomFightSetup());
+
+    // Cancel button in dialog
+    const cancelBtn = document.getElementById('custom-fight-cancel');
+    if (cancelBtn) cancelBtn.addEventListener('click', hideCustomFightDialog);
+
+    // GO button in dialog
+    const goBtn = document.getElementById('custom-fight-go');
+    if (goBtn) goBtn.addEventListener('click', () => launchCustomFight());
+
+    // Close on Escape
+    const dialog = document.getElementById('custom-fight-dialog');
+    if (dialog) {
+        dialog.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') hideCustomFightDialog();
+        });
+    }
+}
+
+/**
+ * Shows the Custom Fight setup dialog and populates options.
+ */
+async function showCustomFightSetup() {
+    if (isArenaActive()) return;
+    if (gameState.gridPieces.length === 0) {
+        console.log('Place some pieces on the grid first! (Need at least a Core)');
+        return;
+    }
+
+    const dialog = document.getElementById('custom-fight-dialog');
+    if (!dialog) return;
+
+    const pilotList = document.getElementById('fight-pilot-list');
+    const enemyList = document.getElementById('fight-enemy-list');
+    if (!pilotList || !enemyList) return;
+
+    // Check if a trained model exists and get stats
+    const stats = await getModelStats();
+    const hasModel = !!stats;
+    const framesHint = stats && stats.totalFramesTrained > 0
+        ? `${stats.totalFramesTrained} frames`
+        : (hasModel ? 'Trained' : 'Not trained');
+
+    // --- Build Pilot column ---
+    pilotList.innerHTML = '';
+    addFightOption(pilotList, 'pilot', 'manual', 'Me (manual)', 'WASD + mouse', true);
+    addFightOption(pilotList, 'pilot', 'my-ai', 'My AI', framesHint, false, !hasModel);
+
+    // --- Build Enemy column ---
+    enemyList.innerHTML = '';
+
+    // Random preset
+    addFightOption(enemyList, 'enemy', 'random', 'Random', 'Random preset ship', true);
+
+    // Specific presets
+    const presetHeader = document.createElement('div');
+    presetHeader.className = 'fight-section-header';
+    presetHeader.textContent = 'Presets';
+    enemyList.appendChild(presetHeader);
+
+    for (const presetName of Object.keys(SHIP_PRESETS)) {
+        const label = presetName.charAt(0).toUpperCase() + presetName.slice(1);
+        addFightOption(enemyList, 'enemy', `preset:${presetName}`, label, 'Random controller');
+    }
+
+    // My AI
+    if (hasModel) {
+        const aiHeader = document.createElement('div');
+        aiHeader.className = 'fight-section-header';
+        aiHeader.textContent = 'Your AI';
+        enemyList.appendChild(aiHeader);
+        addFightOption(enemyList, 'enemy', 'my-ai', 'My AI', framesHint);
+    }
+
+    // Saved ships with weights
+    const ships = await listSavedShips();
+    const shipsWithWeights = ships.filter(s => s.hasWeights);
+    if (shipsWithWeights.length > 0) {
+        const savedHeader = document.createElement('div');
+        savedHeader.className = 'fight-section-header';
+        savedHeader.textContent = 'Saved Ships';
+        enemyList.appendChild(savedHeader);
+
+        for (const ship of shipsWithWeights) {
+            addFightOption(enemyList, 'enemy', `saved:${ship.id}`, ship.shipName, 'Trained AI');
+        }
+    }
+
+    dialog.classList.remove('hidden');
+}
+
+/**
+ * Adds a radio-style option to a fight option list.
+ */
+function addFightOption(container, group, value, label, hint, selected = false, disabled = false) {
+    const el = document.createElement('div');
+    el.className = 'fight-option' + (selected ? ' selected' : '') + (disabled ? ' disabled' : '');
+    el.dataset.group = group;
+    el.dataset.value = value;
+    el.innerHTML = `
+        <div class="fight-option-radio"></div>
+        <span class="fight-option-label">${label}</span>
+        <span class="fight-option-hint">${hint || ''}</span>
+    `;
+
+    if (!disabled) {
+        el.addEventListener('click', () => {
+            // Deselect siblings in same group
+            const siblings = container.querySelectorAll(`.fight-option[data-group="${group}"]`);
+            for (const sib of siblings) sib.classList.remove('selected');
+            el.classList.add('selected');
+        });
+    }
+
+    container.appendChild(el);
+}
+
+function hideCustomFightDialog() {
+    const dialog = document.getElementById('custom-fight-dialog');
+    if (dialog) dialog.classList.add('hidden');
+}
+
+/**
+ * Reads selections from the Custom Fight dialog and launches the fight.
+ */
+async function launchCustomFight() {
+    const pilotEl = document.querySelector('#fight-pilot-list .fight-option.selected');
+    const enemyEl = document.querySelector('#fight-enemy-list .fight-option.selected');
+
+    if (!pilotEl || !enemyEl) {
+        console.log('Select both a pilot and an enemy');
+        return;
+    }
+
+    const pilot = pilotEl.dataset.value;
+    const enemy = enemyEl.dataset.value;
+    const arenaType = getSelectedArenaType();
+
+    hideCustomFightDialog();
+
+    await enterCustomFight(pilot, enemy, arenaType);
+}
+
+// Whether the current custom fight uses manual (player) piloting
+let isCustomFight = false;
+let customFightManualPilot = false;
+
+/**
+ * Enters a custom fight based on pilot and enemy selections.
+ * @param {string} pilot - 'manual' or 'my-ai'
+ * @param {string} enemy - 'random', 'preset:name', 'my-ai', 'saved:id'
+ * @param {string} arenaType - Arena type key
+ */
+async function enterCustomFight(pilot, enemy, arenaType) {
+    const playerPieces = createPiecesFromLayout(getShipLayout());
+    if (playerPieces.length === 0) {
+        console.log('Place some pieces on the grid first');
+        return;
+    }
+
+    // Resolve enemy pieces and controller
+    let opponentPieces;
+    let opponentController;
+
+    if (enemy === 'random') {
+        const presetNames = Object.keys(SHIP_PRESETS);
+        const pick = presetNames[Math.floor(Math.random() * presetNames.length)];
+        opponentPieces = createPiecesFromLayout(SHIP_PRESETS[pick]);
+        opponentController = createRandomController();
+        console.log(`Custom fight: enemy = random preset (${pick})`);
+    } else if (enemy.startsWith('preset:')) {
+        const presetName = enemy.slice('preset:'.length);
+        opponentPieces = createPiecesFromLayout(SHIP_PRESETS[presetName]);
+        opponentController = createRandomController();
+        console.log(`Custom fight: enemy = preset ${presetName}`);
+    } else if (enemy === 'my-ai') {
+        // Clone current ship layout for enemy, load trained model
+        opponentPieces = createPiecesFromLayout(getShipLayout());
+        const loaded = await loadModelWeights();
+        if (!loaded) {
+            console.error('No trained model found for My AI enemy');
+            return;
+        }
+        opponentController = null; // Will use enterArenaWithOpponent path
+        const success = enterArenaWithOpponent(
+            playerPieces, opponentPieces, loaded.model,
+            getScene(), getCamera(), getRenderer(), screenToWorld,
+            arenaType
+        );
+        if (success) {
+            isCustomFight = true;
+            customFightManualPilot = (pilot === 'manual');
+            wireCustomFightOutcome(pilot);
+            if (pilot === 'manual') {
+                startRecording();
+            } else {
+                // AI pilot — switch to AI control
+                await switchPlayerToAi();
+            }
+            showDesignMode(false);
+            updateFightButtonText();
+        } else {
+            loaded.model.dispose();
+        }
+        return;
+    } else if (enemy.startsWith('saved:')) {
+        const shipId = parseInt(enemy.slice('saved:'.length), 10);
+        const record = await loadSavedShip(shipId);
+        if (!record || !record.weightsBase64 || !record.topology) {
+            console.error('Saved ship has no trained weights');
+            return;
+        }
+        opponentPieces = createPiecesFromLayout(record.layout);
+        let opponentModel;
+        try {
+            const result = await importModelFromJson({
+                topology: record.topology,
+                weightSpecs: record.weightSpecs,
+                weightsBase64: record.weightsBase64,
+                config: record.modelConfig,
+                schemaVersion: record.schemaVersion
+            });
+            opponentModel = result.model;
+        } catch (err) {
+            console.error('Failed to load opponent model:', err.message);
+            return;
+        }
+        const success = enterArenaWithOpponent(
+            playerPieces, opponentPieces, opponentModel,
+            getScene(), getCamera(), getRenderer(), screenToWorld,
+            arenaType
+        );
+        if (success) {
+            isCustomFight = true;
+            customFightManualPilot = (pilot === 'manual');
+            wireCustomFightOutcome(pilot);
+            if (pilot === 'manual') {
+                startRecording();
+            } else {
+                await switchPlayerToAi();
+            }
+            showDesignMode(false);
+            updateFightButtonText();
+        } else {
+            opponentModel.dispose();
+        }
+        return;
+    } else {
+        console.error('Unknown enemy selection:', enemy);
+        return;
+    }
+
+    if (!opponentPieces || opponentPieces.length === 0) {
+        console.error('Failed to create opponent pieces');
+        return;
+    }
+
+    // Enter with controller (for preset / random paths)
+    const success = enterArenaWithController(
+        playerPieces, opponentPieces, opponentController,
+        getScene(), getCamera(), getRenderer(), screenToWorld,
+        arenaType
+    );
+
+    if (success) {
+        isCustomFight = true;
+        customFightManualPilot = (pilot === 'manual');
+        wireCustomFightOutcome(pilot);
+        if (pilot === 'manual') {
+            startRecording();
+        } else {
+            await switchPlayerToAi();
+        }
+        showDesignMode(false);
+        updateFightButtonText();
+    }
+}
+
+/**
+ * Switches the player ship to AI control using the model from IndexedDB.
+ */
+async function switchPlayerToAi() {
+    const loaded = await loadModelWeights();
+    if (!loaded) {
+        console.warn('No trained model found for AI pilot');
+        return;
+    }
+    switchToAiControl(loaded.model);
+}
+
+/**
+ * Wires outcome callbacks for a custom fight.
+ * Manual pilot fights: auto-train after fight end.
+ * AI pilot fights: no recording/training.
+ * @param {string} pilot - 'manual' or 'my-ai'
+ */
+function wireCustomFightOutcome(pilot) {
+    setOutcomeCallbacks(
+        () => handleCustomFightEnd('won', pilot),
+        () => handleCustomFightEnd('lost', pilot)
+    );
+}
+
+/**
+ * Handles end of a custom fight.
+ * @param {'won'|'lost'} outcome
+ * @param {string} pilot - 'manual' or 'my-ai'
+ */
+async function handleCustomFightEnd(outcome, pilot) {
+    // Stop recording
+    if (isRecording()) stopRecording();
+
+    if (pilot === 'manual') {
+        // Auto-train from recorded data
+        showTrainingSpinner();
+        const trained = await autoTrainFromRecording();
+        clearRuns();
+        if (trained) trained.model.dispose();
+        refreshAiStatusIndicator();
+    }
+
+    exitArena();
+    hideFightOutcome();
+    showDesignMode(true);
+    updateFightButtonText();
+
+    isCustomFight = false;
+    customFightManualPilot = false;
+
+    console.log(`Custom fight ${outcome}`);
 }
 
 /**
@@ -569,7 +945,7 @@ function setupOpponentsDropdown() {
 }
 
 /**
- * Refreshes the Opponents dropdown from Firestore
+ * Refreshes the Opponents dropdown with default ships and online opponents
  */
 async function refreshOpponentsDropdown() {
     const dropdown = document.getElementById('opponents-dropdown');
@@ -577,13 +953,51 @@ async function refreshOpponentsDropdown() {
 
     dropdown.innerHTML = '';
 
-    if (!isOnline()) {
-        const msg = document.createElement('div');
-        msg.className = 'my-ships-empty';
-        msg.textContent = 'Online features not configured';
-        dropdown.appendChild(msg);
-        return;
+    // -- Default Ships section (always shown) --
+    const presetHeader = document.createElement('div');
+    presetHeader.className = 'my-ships-empty';
+    presetHeader.textContent = 'Default Ships';
+    dropdown.appendChild(presetHeader);
+
+    for (const presetName of Object.keys(SHIP_PRESETS)) {
+        const row = document.createElement('div');
+        row.className = 'opponent-item';
+
+        const info = document.createElement('div');
+        info.className = 'opponent-info';
+
+        const name = document.createElement('div');
+        name.className = 'opponent-name';
+        name.textContent = presetName.charAt(0).toUpperCase() + presetName.slice(1);
+
+        const detail = document.createElement('div');
+        detail.className = 'opponent-detail';
+        detail.textContent = 'Default ship';
+
+        info.appendChild(name);
+        info.appendChild(detail);
+
+        const fightBtn = document.createElement('button');
+        fightBtn.className = 'opponent-fight';
+        fightBtn.textContent = 'Fight';
+        fightBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            startFightWithPreset(presetName);
+            dropdown.classList.remove('open');
+        });
+
+        row.appendChild(info);
+        row.appendChild(fightBtn);
+        dropdown.appendChild(row);
     }
+
+    // -- Online Opponents section (only when online) --
+    if (!isOnline()) return;
+
+    const onlineHeader = document.createElement('div');
+    onlineHeader.className = 'my-ships-empty';
+    onlineHeader.textContent = 'Online Opponents';
+    dropdown.appendChild(onlineHeader);
 
     const loading = document.createElement('div');
     loading.className = 'my-ships-empty';
@@ -591,7 +1005,7 @@ async function refreshOpponentsDropdown() {
     dropdown.appendChild(loading);
 
     const fighters = await fetchFighters();
-    dropdown.innerHTML = '';
+    dropdown.removeChild(loading);
 
     // Filter out current player's own entries
     const playerName = getPlayerName();
@@ -600,7 +1014,7 @@ async function refreshOpponentsDropdown() {
     if (others.length === 0) {
         const empty = document.createElement('div');
         empty.className = 'my-ships-empty';
-        empty.textContent = 'No opponents found';
+        empty.textContent = 'No online opponents found';
         dropdown.appendChild(empty);
         return;
     }
@@ -705,8 +1119,8 @@ async function fightAgainstOnlineOpponent(docId) {
 // Track current ship name for uploads (set from landing screen or preset load)
 let currentShipName = 'unnamed';
 
-// Auto-training config: fewer epochs for quick post-fight training
-const AUTO_TRAIN_EPOCHS = 15;
+// Auto-training config: cumulative epochs per fight
+const AUTO_TRAIN_EPOCHS = 50;
 
 /**
  * Auto-trains the ML model from recorded fight data, then saves weights.
@@ -743,8 +1157,11 @@ async function autoTrainFromRecording() {
     }
 
     try {
-        await trainModel(model, data, config);
-        await saveModelWeights(model, config);
+        const onEpochEnd = (epoch, logs) => {
+            updateTrainingProgress(epoch, config.epochs, logs?.loss);
+        };
+        await trainModel(model, data, config, onEpochEnd);
+        await saveModelWeights(model, config, { newFrames: data.train.numFrames });
         console.log(`Auto-trained on ${data.train.numFrames} frames (${AUTO_TRAIN_EPOCHS} epochs)`);
         return { model, config };
     } catch (err) {
@@ -953,10 +1370,10 @@ function copyShipLayoutToClipboard() {
         console.log('Ship layout copied to clipboard!');
         console.log(json);
         // Brief visual feedback
-        const btn = document.getElementById('copy-layout-btn');
+        const btn = document.getElementById('copy-layout-icon');
         if (btn) {
             const originalText = btn.textContent;
-            btn.textContent = 'Copied!';
+            btn.textContent = '\u2713';
             setTimeout(() => { btn.textContent = originalText; }, 1000);
         }
     }).catch(err => {
@@ -985,6 +1402,8 @@ function exitArenaMode() {
     if (isRecording()) stopRecording();
 
     isStageFight = false;
+    isCustomFight = false;
+    customFightManualPilot = false;
     currentFightStage = 0;
     hideFightOutcome();
     exitArena();
@@ -1077,29 +1496,26 @@ async function startStageFightWithRecord(record) {
 }
 
 /**
- * Starts a stage fight against a random preset ship (fallback when no opponents).
+ * Starts a fight against a specific preset ship by name.
+ * @param {string} presetName - Key from SHIP_PRESETS (e.g. 'starter', 'gunboat')
  */
-function startStageFightWithPreset() {
-    const presetNames = Object.keys(SHIP_PRESETS);
-    const pick = presetNames[Math.floor(Math.random() * presetNames.length)];
-    const opponentPieces = createPiecesFromLayout(SHIP_PRESETS[pick]);
-
+function startFightWithPreset(presetName) {
+    const opponentPieces = createPiecesFromLayout(SHIP_PRESETS[presetName]);
     if (opponentPieces.length === 0) {
-        console.error('Failed to create opponent from preset:', pick);
+        console.error('Failed to create opponent from preset:', presetName);
         return;
     }
-
-    const opponentModel = createModel(getDefaultConfig());
 
     const playerPieces = createPiecesFromLayout(getShipLayout());
     if (playerPieces.length === 0) {
         console.log('Place some pieces on the grid first');
-        opponentModel.dispose();
         return;
     }
 
-    const success = enterArenaWithOpponent(
-        playerPieces, opponentPieces, opponentModel,
+    const opponentController = createRandomController();
+
+    const success = enterArenaWithController(
+        playerPieces, opponentPieces, opponentController,
         getScene(), getCamera(), getRenderer(), screenToWorld,
         getSelectedArenaType()
     );
@@ -1110,10 +1526,17 @@ function startStageFightWithPreset() {
         startRecording();
         showDesignMode(false);
         updateFightButtonText();
-        console.log(`Stage ${currentFightStage}: Fighting preset ${pick} (fallback)`);
-    } else {
-        opponentModel.dispose();
+        console.log(`Fighting preset: ${presetName}`);
     }
+}
+
+/**
+ * Starts a stage fight against a random preset ship (fallback when no opponents).
+ */
+function startStageFightWithPreset() {
+    const presetNames = Object.keys(SHIP_PRESETS);
+    const pick = presetNames[Math.floor(Math.random() * presetNames.length)];
+    startFightWithPreset(pick);
 }
 
 /**
@@ -1146,6 +1569,9 @@ async function handleStageFightEnd(outcome) {
 
     // Clean up recorded runs (already trained, don't accumulate indefinitely)
     clearRuns();
+
+    // Refresh AI status indicator
+    refreshAiStatusIndicator();
 
     // Exit the arena (clears physics, ships, etc.)
     exitArena();
@@ -1194,11 +1620,11 @@ async function handleStageFightEnd(outcome) {
 }
 
 /**
- * Reads the selected arena type from the dev toolbar dropdown
+ * Reads the selected arena type from the fight dialog or falls back to default
  * @returns {string} Arena type key ('random', 'base', 'saw', 'energy')
  */
 function getSelectedArenaType() {
-    const el = document.getElementById('arena-type-select');
+    const el = document.getElementById('fight-arena-select');
     return el ? el.value : 'random';
 }
 
@@ -1241,9 +1667,7 @@ function enterTestArena() {
  */
 function updateFightButtonText() {
     const fightBtn = document.getElementById('fight-btn');
-    const testBtn = document.getElementById('test-arena-btn');
     if (fightBtn) fightBtn.textContent = isArenaActive() ? 'Exit' : 'FIGHT!';
-    if (testBtn) testBtn.textContent = isArenaActive() ? 'Exit' : 'Free Flight';
 }
 
 /**
@@ -1280,13 +1704,15 @@ function showDesignMode(visible) {
     const stageIndicator = document.getElementById('stage-indicator');
     const saveBtn = document.getElementById('save-ship-btn');
     const myShips = document.getElementById('my-ships-selector');
-    const opponents = document.getElementById('opponents-selector');
     const devToolbar = document.getElementById('dev-toolbar');
+    const copyIcon = document.getElementById('copy-layout-icon');
     if (stageIndicator) stageIndicator.style.display = visible ? '' : 'none';
     if (saveBtn) saveBtn.style.display = visible ? '' : 'none';
     if (myShips) myShips.style.display = visible ? '' : 'none';
-    if (opponents) opponents.style.display = visible ? '' : 'none';
     if (devToolbar) devToolbar.style.display = visible ? '' : 'none';
+    if (copyIcon) copyIcon.style.display = visible ? '' : 'none';
+    const aiStatus = document.getElementById('ai-status-indicator');
+    if (aiStatus) aiStatus.style.display = visible ? '' : 'none';
 }
 
 let lastTime = 0;

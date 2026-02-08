@@ -34,7 +34,7 @@ import { normalizeAngle, rotateVector, length, normalize, dot } from '../math.js
 import { getArenaPhysicsScale, getArenaDimensions } from './arenaPhysics.js';
 
 // Configuration constants
-const MAX_ENEMIES = 4;
+const MAX_ENEMIES = 1;  // Single engaged enemy slot (v7)
 const MAX_HAZARDS = 4;
 const MAX_BLOCKERS = 4;
 const ARENA_DIAGONAL = Math.sqrt(80 * 80 + 60 * 60);  // ~100 units
@@ -44,8 +44,8 @@ const SECTOR_COUNT = 8;  // Threat radar sectors
 const HAZARD_AWARENESS_RANGE = 10;  // units beyond damage edge where proximity = 0
 const WALL_AWARENESS_RANGE = 15;    // units from wall where proximity = 0
 
-// Total size of flattened sensing state (v6: walls now world-relative proximity)
-const SENSING_STATE_SIZE = 86;
+// Total size of flattened sensing state (v7: single enemy slot)
+const SENSING_STATE_SIZE = 59;
 
 // ============================================================================
 // Main Sensing Function
@@ -58,9 +58,11 @@ const SENSING_STATE_SIZE = 86;
  * @param {Array} hazards - Array of hazard objects (future use)
  * @param {Array} blockers - Array of blocker objects {x, y, radius}
  * @param {Array} projectiles - Array of active projectiles
+ * @param {object|null} engagementTarget - World-space point (e.g. mousePos) for
+ *   selecting the engaged enemy. If null, nearest enemy is used.
  * @returns {object} Complete sensing state
  */
-function computeSensingState(ship, allShips, hazards, blockers, projectiles) {
+function computeSensingState(ship, allShips, hazards, blockers, projectiles, engagementTarget) {
     const scale = getArenaPhysicsScale();
     const dimensions = getArenaDimensions();
     
@@ -86,8 +88,10 @@ function computeSensingState(ship, allShips, hazards, blockers, projectiles) {
     const walls = computeWallDistances(shipPos, shipAngle, dimensions);
     const threats = computeThreatRadar(ship, shipPos, shipAngle, shipForward, projectiles);
     
-    // Compute enemy sensing (filter out self, sort by distance)
-    const enemyResult = computeEnemiesSensing(ship, shipPos, shipVel, shipAngle, shipForward, allShips);
+    // Compute enemy sensing (single engaged enemy slot)
+    const enemyResult = computeEnemiesSensing(
+        ship, shipPos, shipVel, shipAngle, shipForward, allShips, engagementTarget
+    );
     
     // Compute hazard sensing (future - empty for now)
     const hazardSensing = computeHazardsSensing(shipPos, shipVel, shipAngle, shipForward, hazards || []);
@@ -273,14 +277,15 @@ function arrayToThreatObject(arr) {
 // ============================================================================
 
 /**
- * Computes sensing data for all enemies.
- * Returns both normalized sensing features (for NN input) and raw world-space
- * data (for aim label computation during recording and aim reconstruction
- * during ML inference).
+ * Computes sensing data for the single engaged enemy.
+ * Selects one enemy using engagementTarget (mouse aim) if provided,
+ * otherwise falls back to nearest enemy.
  *
- * @returns {{ sensing: Array, worldData: Array }}
+ * @param {object|null} engagementTarget - World-space point for picking the
+ *   engaged enemy (angular proximity). Null = use nearest.
+ * @returns {{ sensing: Array, worldData: Array }} Single-element arrays
  */
-function computeEnemiesSensing(ship, shipPos, shipVel, shipAngle, shipForward, allShips) {
+function computeEnemiesSensing(ship, shipPos, shipVel, shipAngle, shipForward, allShips, engagementTarget) {
     const scale = getArenaPhysicsScale();
     
     // Filter to enemies only (different team, not destroyed)
@@ -318,22 +323,69 @@ function computeEnemiesSensing(ship, shipPos, shipVel, shipAngle, shipForward, a
         return { sensing, world };
     });
     
-    // Sort by distance (nearest first)
-    entries.sort((a, b) => a.sensing.distance - b.sensing.distance);
+    // Pick the single engaged enemy
+    const picked = selectEngagedEnemy(shipPos, engagementTarget, entries);
     
-    // Pad to MAX_ENEMIES
-    while (entries.length < MAX_ENEMIES) {
-        entries.push({
-            sensing: createEmptyEnemySlot(),
-            world: createEmptyEnemyWorldSlot()
-        });
+    if (picked) {
+        return {
+            sensing: [picked.sensing],
+            worldData: [picked.world]
+        };
     }
     
-    const trimmed = entries.slice(0, MAX_ENEMIES);
+    // No enemies present - return empty slot
     return {
-        sensing: trimmed.map(e => e.sensing),
-        worldData: trimmed.map(e => e.world)
+        sensing: [createEmptyEnemySlot()],
+        worldData: [createEmptyEnemyWorldSlot()]
     };
+}
+
+/**
+ * Selects the single engaged enemy from all candidates.
+ * If engagementTarget is provided, picks the enemy whose angle from ship is
+ * closest to the target's angle (mouse aim). Otherwise picks nearest.
+ *
+ * @param {object} shipPos - Ship world position {x, y}
+ * @param {object|null} engagementTarget - World-space aim point {x, y} or null
+ * @param {Array} entries - All enemy entries with { sensing, world }
+ * @returns {object|null} The selected entry, or null if no enemies
+ */
+function selectEngagedEnemy(shipPos, engagementTarget, entries) {
+    if (entries.length === 0) return null;
+    if (entries.length === 1) return entries[0];
+    
+    // If we have an engagement target, pick by angular proximity
+    if (engagementTarget) {
+        const targetAngle = Math.atan2(
+            engagementTarget.y - shipPos.y,
+            engagementTarget.x - shipPos.x
+        );
+        let bestIdx = 0;
+        let bestDiff = Infinity;
+        for (let i = 0; i < entries.length; i++) {
+            const enemyAngle = Math.atan2(
+                entries[i].world.pos.y - shipPos.y,
+                entries[i].world.pos.x - shipPos.x
+            );
+            const diff = Math.abs(normalizeAngle(targetAngle - enemyAngle));
+            if (diff < bestDiff) {
+                bestDiff = diff;
+                bestIdx = i;
+            }
+        }
+        return entries[bestIdx];
+    }
+    
+    // Fallback: nearest enemy by distance
+    let bestIdx = 0;
+    let bestDist = entries[0].sensing.distance;
+    for (let i = 1; i < entries.length; i++) {
+        if (entries[i].sensing.distance < bestDist) {
+            bestDist = entries[i].sensing.distance;
+            bestIdx = i;
+        }
+    }
+    return entries[bestIdx];
 }
 
 /**
@@ -617,7 +669,7 @@ function flattenSensingState(state) {
     values.push(state.threats.left);
     values.push(state.threats.frontLeft);
     
-    // Enemies (4 * 9 = 36 values)
+    // Enemy (1 * 9 = 9 values -- single engaged enemy)
     for (const enemy of state.enemies) {
         values.push(enemy.present);
         values.push(enemy.distance);

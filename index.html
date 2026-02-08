@@ -386,6 +386,15 @@
         #landing-loading.active {
             display: flex;
         }
+        /* Callsign section (hidden until loading completes) */
+        #landing-content {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+        }
+        #landing-content.active {
+            display: flex;
+        }
         .name-btn {
             padding: 10px 28px;
             border: none;
@@ -686,6 +695,209 @@
         #arena-name-overlay.fade-out {
             opacity: 0;
         }
+
+        /* Custom Fight Setup Dialog */
+        #custom-fight-dialog {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(10, 10, 25, 0.88);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 2000;
+            transition: opacity 0.2s ease-out;
+        }
+        #custom-fight-dialog.hidden {
+            display: none;
+        }
+        .fight-dialog-box {
+            background: #2d3748;
+            border: 1px solid #4a5568;
+            border-radius: 10px;
+            padding: 28px 32px;
+            min-width: 480px;
+            max-width: 560px;
+        }
+        .fight-dialog-box h3 {
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 18px;
+            color: #ffcc00;
+            margin: 0 0 20px 0;
+            text-align: center;
+            letter-spacing: 1px;
+        }
+        .fight-columns {
+            display: flex;
+            gap: 24px;
+            margin-bottom: 18px;
+        }
+        .fight-column {
+            flex: 1;
+            min-width: 0;
+        }
+        .fight-column-title {
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: #718096;
+            margin-bottom: 8px;
+        }
+        .fight-vs {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 20px;
+            font-weight: 700;
+            color: #4a5568;
+            padding-top: 32px;
+        }
+        .fight-option-list {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            max-height: 260px;
+            overflow-y: auto;
+        }
+        .fight-option {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: #1a202c;
+            border: 1px solid #4a5568;
+            border-radius: 4px;
+            cursor: pointer;
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 13px;
+            color: #e2e8f0;
+            transition: border-color 0.1s, background 0.1s;
+        }
+        .fight-option:hover {
+            background: #2a4365;
+            border-color: #63b3ed;
+        }
+        .fight-option.selected {
+            background: #2a4365;
+            border-color: #ffcc00;
+            color: #ffcc00;
+        }
+        .fight-option.disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+        .fight-option-radio {
+            width: 14px;
+            height: 14px;
+            border-radius: 50%;
+            border: 2px solid #4a5568;
+            flex-shrink: 0;
+            position: relative;
+        }
+        .fight-option.selected .fight-option-radio {
+            border-color: #ffcc00;
+        }
+        .fight-option.selected .fight-option-radio::after {
+            content: '';
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: #ffcc00;
+        }
+        .fight-option-label {
+            flex: 1;
+        }
+        .fight-option-hint {
+            font-size: 10px;
+            color: #718096;
+        }
+        .fight-section-header {
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 10px;
+            color: #718096;
+            padding: 6px 0 2px 0;
+            font-style: italic;
+        }
+        .fight-arena-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 20px;
+        }
+        .fight-arena-label {
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 12px;
+            color: #a0aec0;
+        }
+        .fight-arena-select {
+            padding: 4px 8px;
+            background: #1a202c;
+            border: 1px solid #4a5568;
+            border-radius: 4px;
+            color: #e2e8f0;
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 12px;
+            outline: none;
+        }
+        .fight-arena-select:focus {
+            border-color: #ffcc00;
+        }
+        .fight-dialog-buttons {
+            display: flex;
+            justify-content: center;
+            gap: 10px;
+        }
+        .fight-dialog-buttons .name-btn {
+            min-width: 100px;
+        }
+
+        /* Copy Layout icon button at top-left of grid */
+        #copy-layout-icon {
+            position: fixed;
+            top: 10px;
+            left: 10px;
+            padding: 5px 8px;
+            background: rgba(74, 85, 104, 0.4);
+            color: #718096;
+            border: 1px solid rgba(74, 85, 104, 0.3);
+            border-radius: 3px;
+            cursor: pointer;
+            font-family: sans-serif;
+            font-size: 13px;
+            z-index: 90;
+            transition: background 0.15s, color 0.15s;
+        }
+        #copy-layout-icon:hover {
+            background: rgba(74, 85, 104, 0.7);
+            color: #e2e8f0;
+        }
+
+        /* AI Training Status indicator */
+        #ai-status-indicator {
+            position: fixed;
+            bottom: 10px;
+            left: 10px;
+            padding: 5px 12px;
+            background: rgba(26, 32, 44, 0.85);
+            border: 1px solid #4a5568;
+            border-radius: 4px;
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 12px;
+            color: #a0aec0;
+            z-index: 90;
+        }
+        #ai-status-indicator.has-model {
+            color: #48bb78;
+            border-color: rgba(72, 187, 120, 0.4);
+        }
     </style>
 </head>
 <body>
@@ -705,34 +917,38 @@
     <div id="landing-screen">
         <div id="landing-title">Machine Arena</div>
         <div id="landing-subtitle">Design. Train. Fight.</div>
-        <div id="landing-version">v0.2 &mdash; Feb 7, 2026 10:49 AM</div>
+        <div id="landing-version">v0.2 &mdash; Feb 7, 2026 7:05 PM</div>
         
-        <div id="landing-callsign-label">Pilot Name</div>
-        <input type="text" id="landing-player-name" placeholder="Enter your name..." maxlength="40" />
-        
-        <div id="landing-ship-label">Ship Name</div>
-        <div id="landing-ship-name"></div>
-        <button id="landing-reroll-btn">Reroll</button>
-        
-        <div id="landing-status">
-            <span class="status-dot connecting"></span>
-            <span id="landing-status-text">Checking connection...</span>
-        </div>
-        
-        <button class="landing-btn primary" id="landing-start-btn" style="display:none;">Start</button>
-        
-        <div id="landing-loading">
+        <!-- Loading bar (shown first while systems initialize) -->
+        <div id="landing-loading" class="active">
             <div id="loading-bar-container">
                 <div id="loading-bar"></div>
             </div>
             <div id="loading-status">Initializing...</div>
         </div>
+        
+        <!-- Callsign section (revealed after loading completes) -->
+        <div id="landing-content">
+            <div id="landing-callsign-label">Pilot Name</div>
+            <input type="text" id="landing-player-name" placeholder="Enter your name..." maxlength="40" />
+            
+            <div id="landing-ship-label">Ship Name</div>
+            <div id="landing-ship-name"></div>
+            <button id="landing-reroll-btn">Reroll</button>
+            
+            <div id="landing-status">
+                <span class="status-dot connecting"></span>
+                <span id="landing-status-text">Checking connection...</span>
+            </div>
+            
+            <button class="landing-btn primary" id="landing-start-btn">Start</button>
+        </div>
     </div>
     
-    <canvas id="game-canvas"></canvas>
+    <canvas id="game-canvas" style="display:none"></canvas>
     
     <!-- Getting Started tips (shown until first fight or dismissed) -->
-    <div id="tips-panel">
+    <div id="tips-panel" style="display:none">
         <h4>
             Getting Started
             <button id="tips-dismiss" title="Dismiss">&times;</button>
@@ -747,13 +963,14 @@
     </div>
     
     <!-- Main toolbar (gameplay) -->
-    <div id="toolbar">
+    <div id="toolbar" style="display:none">
         <span class="toolbar-btn" id="stage-indicator" style="opacity:0.85;">Stage 1</span>
         <button class="toolbar-btn primary" id="fight-btn">FIGHT!</button>
     </div>
     
-    <!-- Dev toolbar (debug/testing, bottom-right) -->
-    <div id="dev-toolbar">
+    <!-- Dev toolbar (bottom-right) -->
+    <div id="dev-toolbar" style="display:none">
+        <button class="dev-btn" id="custom-fight-btn">Custom Fight</button>
         <div class="ship-selector">
             <button class="dev-btn ship-selector-btn" id="ship-selector-btn">Load Preset</button>
             <div class="ship-dropdown" id="ship-dropdown">
@@ -768,18 +985,49 @@
             <button class="dev-btn ship-selector-btn" id="my-ships-btn">My Ships</button>
             <div class="ship-dropdown" id="my-ships-dropdown"></div>
         </div>
-        <div class="ship-selector" id="opponents-selector">
-            <button class="dev-btn ship-selector-btn" id="opponents-btn">Opponents</button>
-            <div class="ship-dropdown" id="opponents-dropdown" style="min-width: 240px;"></div>
+    </div>
+
+    <!-- Copy Layout icon (top-left of grid area) -->
+    <button id="copy-layout-icon" title="Copy ship layout to clipboard" style="display:none">&#128203;</button>
+
+    <!-- AI Training Status (below grid, design mode) -->
+    <div id="ai-status-indicator">
+        <span id="ai-status-text">AI: not trained</span>
+    </div>
+
+    <!-- Custom Fight Setup Dialog -->
+    <div id="custom-fight-dialog" class="hidden">
+        <div class="fight-dialog-box">
+            <h3>CUSTOM FIGHT</h3>
+            <div class="fight-columns">
+                <div class="fight-column">
+                    <div class="fight-column-title">Pilot</div>
+                    <div class="fight-option-list" id="fight-pilot-list">
+                        <!-- Populated dynamically -->
+                    </div>
+                </div>
+                <div class="fight-vs">vs</div>
+                <div class="fight-column">
+                    <div class="fight-column-title">Enemy</div>
+                    <div class="fight-option-list" id="fight-enemy-list">
+                        <!-- Populated dynamically -->
+                    </div>
+                </div>
+            </div>
+            <div class="fight-arena-row">
+                <span class="fight-arena-label">Arena:</span>
+                <select class="fight-arena-select" id="fight-arena-select">
+                    <option value="random" selected>Random</option>
+                    <option value="base">The Forge</option>
+                    <option value="saw">The Shredder</option>
+                    <option value="energy">The Conduit</option>
+                </select>
+            </div>
+            <div class="fight-dialog-buttons">
+                <button class="name-btn reroll" id="custom-fight-cancel">Cancel</button>
+                <button class="name-btn accept" id="custom-fight-go">GO!</button>
+            </div>
         </div>
-        <select id="arena-type-select" class="dev-btn">
-            <option value="random" selected>Random</option>
-            <option value="base">The Forge</option>
-            <option value="saw">The Shredder</option>
-            <option value="energy">The Conduit</option>
-        </select>
-        <button class="dev-btn" id="test-arena-btn">Free Flight</button>
-        <button class="dev-btn" id="copy-layout-btn">Copy Layout</button>
     </div>
     
     <div id="stats-panel"></div>

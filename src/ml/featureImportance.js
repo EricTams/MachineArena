@@ -1,8 +1,7 @@
 // Feature importance - gradient-based sensitivity analysis
 //
-// Computes how much each of the 94 sensing inputs affects model output
-// by averaging the absolute gradient of the output sum w.r.t. each input
-// across many samples.
+// Computes how much each sensing input affects model output by averaging
+// the absolute gradient of the output sum w.r.t. each input across samples.
 
 /* global tf */
 
@@ -11,9 +10,9 @@ import { SENSING_SIZE } from './schema.js';
 /**
  * Computes per-feature importance using gradient magnitude
  * @param {tf.Sequential} model - Trained model
- * @param {tf.Tensor2D} inputData - Sensing data [numSamples, 94]
+ * @param {tf.Tensor2D} inputData - Sensing data [numSamples, SENSING_SIZE]
  * @param {number} maxSamples - Max samples to use (default 1000)
- * @returns {Float32Array} Importance values for each of the 94 features
+ * @returns {Float32Array} Importance values for each sensing feature
  */
 function computeFeatureImportance(model, inputData, maxSamples = 1000) {
     const numSamples = Math.min(inputData.shape[0], maxSamples);
@@ -26,7 +25,7 @@ function computeFeatureImportance(model, inputData, maxSamples = 1000) {
         const gradFn = tf.grad(x => model.predict(x).sum());
         const grads = gradFn(subset);
 
-        // Mean of absolute gradients across samples → [94]
+        // Mean of absolute gradients across samples → [SENSING_SIZE]
         return grads.abs().mean(0);
     });
 

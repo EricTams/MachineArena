@@ -328,20 +328,34 @@ function countDiscreteOutcomes(predArr, actualArr, n, actionIdx) {
  * Saves model weights to IndexedDB and config to metadata
  * @param {tf.Sequential} model
  * @param {object} config - The config used to create this model
+ * @param {object} [stats] - Optional training stats to persist
+ * @param {number} [stats.newFrames] - Frames trained in this session (added to cumulative total)
  */
-async function saveModelWeights(model, config) {
+async function saveModelWeights(model, config, stats) {
     await model.save(MODEL_IDB_KEY);
+
+    // Accumulate total frames trained across sessions
+    let totalFramesTrained = 0;
+    const existingMeta = await loadMetadata(CONFIG_META_KEY);
+    if (existingMeta && existingMeta.totalFramesTrained) {
+        totalFramesTrained = existingMeta.totalFramesTrained;
+    }
+    if (stats && stats.newFrames) {
+        totalFramesTrained += stats.newFrames;
+    }
+
     await saveMetadata(CONFIG_META_KEY, {
         config,
         schemaVersion: SCHEMA_VERSION,
-        savedAt: Date.now()
+        savedAt: Date.now(),
+        totalFramesTrained
     });
-    console.log('Model weights and config saved to IndexedDB');
+    console.log(`Model weights saved (total frames trained: ${totalFramesTrained})`);
 }
 
 /**
  * Loads model from IndexedDB, verifies schema compatibility
- * @returns {{ model: tf.Sequential, config: object } | null}
+ * @returns {{ model: tf.Sequential, config: object, totalFramesTrained: number } | null}
  */
 async function loadModelWeights() {
     const meta = await loadMetadata(CONFIG_META_KEY);
@@ -361,11 +375,24 @@ async function loadModelWeights() {
             loss: 'meanSquaredError'
         });
         console.log('Model loaded from IndexedDB');
-        return { model, config: meta.config };
+        return { model, config: meta.config, totalFramesTrained: meta.totalFramesTrained || 0 };
     } catch (err) {
         console.warn('Failed to load model from IndexedDB:', err.message);
         return null;
     }
+}
+
+/**
+ * Loads just the model metadata (no model weights) for quick status checks.
+ * @returns {{ totalFramesTrained: number, savedAt: number } | null}
+ */
+async function getModelStats() {
+    const meta = await loadMetadata(CONFIG_META_KEY);
+    if (!meta || meta.schemaVersion !== SCHEMA_VERSION) return null;
+    return {
+        totalFramesTrained: meta.totalFramesTrained || 0,
+        savedAt: meta.savedAt || 0
+    };
 }
 
 // ============================================================================
@@ -482,6 +509,7 @@ export {
     evaluateModel,
     saveModelWeights,
     loadModelWeights,
+    getModelStats,
     exportModelAsJson,
     importModelFromJson,
     disposeTrainingData

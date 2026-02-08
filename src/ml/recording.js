@@ -1,15 +1,15 @@
 // Recording module - captures (sensing, action) pairs during gameplay
 //
-// Each frame of recording stores a flattened sensing state (86 floats)
-// and a flattened action vector (17 floats). Frames are grouped into
+// Each frame of recording stores a flattened sensing state (59 floats)
+// and a flattened action vector (13 floats). Frames are grouped into
 // runs (one run per recording session).
 //
-// Aim labels use structured decomposition (schema v4):
-//   target selection (one-hot) + velocity/facing lead + ship-relative residual
+// Aim labels use structured decomposition (schema v7):
+//   velocity/facing lead + ship-relative residual (single engaged enemy)
 
 import { flattenSensingState, ARENA_DIAGONAL } from '../arena/sensing.js';
 import { getArenaPhysicsScale } from '../arena/arenaPhysics.js';
-import { normalizeAngle, rotateVector, length, normalize, dot } from '../math.js';
+import { rotateVector, length, normalize, dot } from '../math.js';
 import { ACTION_SIZE, MAX_LEAD_DISTANCE, MIN_ENEMY_SPEED } from './schema.js';
 
 const AIM_HALF_RANGE = ARENA_DIAGONAL / 2;
@@ -48,7 +48,8 @@ function toggleRecording() {
 
 /**
  * Records one frame of (sensing, action) data.
- * Aim labels are decomposed into: target selection, velocity/facing lead, residual.
+ * Aim labels are decomposed into: velocity/facing lead + residual.
+ * The engaged enemy is always slot 0 (selected upstream by sensing).
  * @param {object} sensingState - Structured sensing state from computeSensingState()
  * @param {object} input - Controller input object from getInput()
  * @param {object} ship - The ship being recorded
@@ -63,10 +64,11 @@ function recordFrame(sensingState, input, ship, mousePos) {
     const shipAngle = -ship.body.angle;
     const enemyWorld = sensingState.enemyWorldData;
 
-    const targetIdx = matchTargetEnemy(shipPos, mousePos, enemyWorld);
-    const leads = computeAimLeads(mousePos, enemyWorld, targetIdx);
-    const residual = computeAimResidual(shipPos, shipAngle, mousePos, enemyWorld, targetIdx, leads);
-    const action = flattenAction(input, weaponActive, targetIdx, leads, residual);
+    // Single engaged enemy is always slot 0 (engagement selection done in sensing)
+    const hasEnemy = enemyWorld && enemyWorld[0] && enemyWorld[0].present;
+    const leads = hasEnemy ? computeAimLeads(mousePos, enemyWorld[0]) : { leadVelocity: 0, leadFacing: 0 };
+    const residual = computeAimResidual(shipPos, shipAngle, mousePos, hasEnemy ? enemyWorld[0] : null, leads);
+    const action = flattenAction(input, weaponActive, leads, residual);
 
     currentRun.sensing.push(sense);
     currentRun.action.push(action);
@@ -95,41 +97,14 @@ function getShipWorldPos(ship) {
 // ============================================================================
 
 /**
- * Finds which enemy slot the mouse is closest to aiming at.
- * Uses angular proximity: the enemy whose world angle from ship is closest
- * to the mouse's world angle from ship.
- * @returns {number} Enemy slot index (0-3), or -1 if no enemies present
- */
-function matchTargetEnemy(shipPos, mousePos, enemyWorldData) {
-    if (!mousePos || !enemyWorldData) return -1;
-
-    const mouseAngle = Math.atan2(mousePos.y - shipPos.y, mousePos.x - shipPos.x);
-    let bestIdx = -1;
-    let bestDiff = Infinity;
-
-    for (let i = 0; i < enemyWorldData.length; i++) {
-        if (!enemyWorldData[i].present) continue;
-        const enemyAngle = Math.atan2(
-            enemyWorldData[i].pos.y - shipPos.y,
-            enemyWorldData[i].pos.x - shipPos.x
-        );
-        const diff = Math.abs(normalizeAngle(mouseAngle - enemyAngle));
-        if (diff < bestDiff) {
-            bestDiff = diff;
-            bestIdx = i;
-        }
-    }
-    return bestIdx;
-}
-
-/**
  * Projects the mouse-to-enemy offset onto enemy velocity and facing directions.
+ * @param {object|null} mousePos - Mouse world position
+ * @param {object} enemy - Single engaged enemy world data {pos, vel, forwardAngle}
  * @returns {{ leadVelocity: number, leadFacing: number }} Normalized [-1, 1]
  */
-function computeAimLeads(mousePos, enemyWorldData, targetIdx) {
-    if (targetIdx < 0 || !mousePos) return { leadVelocity: 0, leadFacing: 0 };
+function computeAimLeads(mousePos, enemy) {
+    if (!mousePos) return { leadVelocity: 0, leadFacing: 0 };
 
-    const enemy = enemyWorldData[targetIdx];
     const toMouse = { x: mousePos.x - enemy.pos.x, y: mousePos.y - enemy.pos.y };
 
     // Lead along velocity direction (zero if enemy nearly stationary)
@@ -150,14 +125,19 @@ function computeAimLeads(mousePos, enemyWorldData, targetIdx) {
 /**
  * Computes the residual: the difference between the actual mouse position and
  * the reconstructed structured aim, in ship-local coordinates.
+ * @param {object} shipPos - Ship world position
+ * @param {number} shipAngle - Ship rotation angle
+ * @param {object|null} mousePos - Mouse world position
+ * @param {object|null} enemy - Engaged enemy world data, or null if no enemy
+ * @param {object} leads - Computed aim leads
  * @returns {{ x: number, y: number }} Normalized [-1, 1]
  */
-function computeAimResidual(shipPos, shipAngle, mousePos, enemyWorldData, targetIdx, leads) {
+function computeAimResidual(shipPos, shipAngle, mousePos, enemy, leads) {
     if (!mousePos) return { x: 0, y: 0 };
 
     // Reconstruct structured aim in world coords
-    const structured = (targetIdx >= 0)
-        ? reconstructStructuredAim(enemyWorldData[targetIdx], leads)
+    const structured = enemy
+        ? reconstructStructuredAim(enemy, leads)
         : shipPos;  // No target: residual captures the full aim offset from ship
 
     // Residual = actual mouse - structured aim, converted to ship-local
@@ -200,11 +180,10 @@ function reconstructStructuredAim(enemy, leads) {
 // ============================================================================
 
 /**
- * Flattens controller input into a fixed-size Float32Array (schema v4).
- * Action[8] is "weaponActive" (any cannon on cooldown).
- * Actions[9-12] are one-hot target selection, [13-14] leads, [15-16] residual.
+ * Flattens controller input into a fixed-size Float32Array (schema v7).
+ * Action[0-8] discrete, [9-10] leads, [11-12] residual.
  */
-function flattenAction(input, weaponActive, targetIdx, leads, residual) {
+function flattenAction(input, weaponActive, leads, residual) {
     const action = new Float32Array(ACTION_SIZE);
     action[0] = input.forward ? 1 : 0;
     action[1] = input.back ? 1 : 0;
@@ -215,14 +194,12 @@ function flattenAction(input, weaponActive, targetIdx, leads, residual) {
     action[6] = input.turnToward ? 1 : 0;
     action[7] = input.fastTurn ? 1 : 0;
     action[8] = weaponActive ? 1 : 0;
-    // One-hot target selection
-    if (targetIdx >= 0 && targetIdx < 4) action[9 + targetIdx] = 1;
     // Continuous leads
-    action[13] = leads.leadVelocity;
-    action[14] = leads.leadFacing;
+    action[9] = leads.leadVelocity;
+    action[10] = leads.leadFacing;
     // Continuous residual
-    action[15] = residual.x;
-    action[16] = residual.y;
+    action[11] = residual.x;
+    action[12] = residual.y;
     return action;
 }
 

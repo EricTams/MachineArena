@@ -3,9 +3,9 @@
 // Follows the same controller interface as PlayerController and RandomController:
 //   { type, getInput(ship, deltaTime), postUpdate() }
 //
-// The model receives flattened sensing (86 floats) and outputs action (17 floats).
+// The model receives flattened sensing (59 floats) and outputs action (13 floats).
 // Discrete outputs are thresholded at 0.5. Aim is reconstructed from:
-//   target selection (argmax one-hot) + velocity/facing leads + ship-relative residual.
+//   velocity/facing leads + ship-relative residual (single engaged enemy in slot 0).
 
 /* global tf */
 
@@ -85,7 +85,7 @@ function predict(model, sensingState) {
 
 /**
  * Converts raw model prediction to a controller input object.
- * Reconstructs aim as: structured (target + leads) + residual.
+ * Reconstructs aim from single engaged enemy (slot 0) + leads + residual.
  */
 function predictionToInput(pred, ship, enemyWorldData) {
     const forward  = pred[0] >= DISCRETE_THRESHOLD;
@@ -98,18 +98,15 @@ function predictionToInput(pred, ship, enemyWorldData) {
     const fastTurn = pred[7] >= DISCRETE_THRESHOLD;
     const fire     = pred[8] >= DISCRETE_THRESHOLD;
 
-    // Target selection: argmax of one-hot slots, only if above threshold
-    const targetIdx = pickTarget(pred);
-
     // Unscale continuous outputs from sigmoid [0,1] to [-1,1]
-    const leadVelocity = pred[13] * 2 - 1;
-    const leadFacing   = pred[14] * 2 - 1;
-    const residualX    = pred[15] * 2 - 1;
-    const residualY    = pred[16] * 2 - 1;
+    const leadVelocity = pred[9] * 2 - 1;
+    const leadFacing   = pred[10] * 2 - 1;
+    const residualX    = pred[11] * 2 - 1;
+    const residualY    = pred[12] * 2 - 1;
 
-    // Reconstruct world-space aim from structured + residual
+    // Reconstruct world-space aim from engaged enemy (slot 0) + leads + residual
     const aimTarget = reconstructWorldAim(
-        ship, enemyWorldData, targetIdx,
+        ship, enemyWorldData,
         leadVelocity, leadFacing, residualX, residualY
     );
 
@@ -127,31 +124,16 @@ function predictionToInput(pred, ship, enemyWorldData) {
     };
 }
 
-/**
- * Picks the target enemy slot from one-hot prediction outputs.
- * Returns the slot with highest activation above DISCRETE_THRESHOLD, or -1.
- */
-function pickTarget(pred) {
-    let bestIdx = -1;
-    let bestVal = DISCRETE_THRESHOLD;
-    for (let i = 0; i < 4; i++) {
-        if (pred[9 + i] > bestVal) {
-            bestVal = pred[9 + i];
-            bestIdx = i;
-        }
-    }
-    return bestIdx;
-}
-
 // ============================================================================
 // Aim reconstruction
 // ============================================================================
 
 /**
  * Reconstructs the world-space aim target from model predictions.
+ * Uses the single engaged enemy in slot 0.
  * finalAim = structuredAim (enemy + leads) + residual (ship-local correction)
  */
-function reconstructWorldAim(ship, enemyWorldData, targetIdx, leadVel, leadFace, resX, resY) {
+function reconstructWorldAim(ship, enemyWorldData, leadVel, leadFace, resX, resY) {
     const scale = getArenaPhysicsScale();
     const shipPosX = ship.body.position.x / scale;
     const shipPosY = -ship.body.position.y / scale;
@@ -161,13 +143,12 @@ function reconstructWorldAim(ship, enemyWorldData, targetIdx, leadVel, leadFace,
     let structX = shipPosX;
     let structY = shipPosY;
 
-    const hasTarget = targetIdx >= 0
-        && enemyWorldData
-        && enemyWorldData[targetIdx]
-        && enemyWorldData[targetIdx].present;
+    const hasTarget = enemyWorldData
+        && enemyWorldData[0]
+        && enemyWorldData[0].present;
 
     if (hasTarget) {
-        const enemy = enemyWorldData[targetIdx];
+        const enemy = enemyWorldData[0];
         structX = enemy.pos.x;
         structY = enemy.pos.y;
 

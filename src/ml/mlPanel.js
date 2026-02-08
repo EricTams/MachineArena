@@ -23,6 +23,7 @@ let panelEl = null;
 let visible = false;
 let currentModel = null;
 let currentConfig = null;
+let lastTrainedFrames = 0;
 
 // ============================================================================
 // Panel lifecycle
@@ -203,6 +204,7 @@ async function onTrain() {
     }
 
     setStatus(`Training on ${data.train.numFrames} frames (val: ${data.val.numFrames})...`);
+    lastTrainedFrames = data.train.numFrames;
     currentModel = createModel(config);
 
     try {
@@ -227,7 +229,7 @@ async function onTrain() {
 async function onSaveModel() {
     if (!currentModel) return setStatus('No model to save. Train first.');
     setStatus('Saving model...');
-    await saveModelWeights(currentModel, currentConfig);
+    await saveModelWeights(currentModel, currentConfig, { newFrames: lastTrainedFrames });
     setStatus('Model saved');
 }
 
