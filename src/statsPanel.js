@@ -1,5 +1,7 @@
 // Stats Panel - displays stats for hovered/selected pieces in the designer
 
+import { isThrusterType, isCannonType } from './pieces/equipment.js';
+
 let panelElement = null;
 let currentPiece = null;
 
@@ -48,10 +50,11 @@ function buildStatsHTML(piece) {
     // Category-specific stats
     if (piece.category === 'core') {
         html += buildCoreStats(def);
+    } else if (piece.category === 'block') {
+        html += buildBlockStats(def);
     } else if (piece.category === 'equipment') {
         html += buildEquipmentStats(piece.type, def);
     }
-    // Blocks only have basic stats (size/mass)
     
     return html;
 }
@@ -70,6 +73,29 @@ function buildCoreStats(def) {
 }
 
 /**
+ * Builds stats section for blocks
+ * @param {object} def - Block definition
+ * @returns {string} HTML string
+ */
+function buildBlockStats(def) {
+    let html = '';
+    
+    if (def.tier) {
+        html += sectionStart('Info');
+        html += statRow('Tier', def.tier.charAt(0).toUpperCase() + def.tier.slice(1));
+        html += sectionEnd();
+    }
+    
+    if (def.hp !== undefined) {
+        html += sectionStart('Durability');
+        html += statRow('HP', def.hp);
+        html += sectionEnd();
+    }
+    
+    return html;
+}
+
+/**
  * Builds stats section for equipment
  * @param {string} type - Equipment type
  * @param {object} def - Equipment definition
@@ -78,7 +104,15 @@ function buildCoreStats(def) {
 function buildEquipmentStats(type, def) {
     let html = '';
     
-    if (type === 'cannon') {
+    // Show tier and cost if available
+    if (def.tier || def.cost !== undefined) {
+        html += sectionStart('Info');
+        if (def.tier) html += statRow('Tier', def.tier.charAt(0).toUpperCase() + def.tier.slice(1));
+        if (def.cost !== undefined) html += statRow('Cost', `${def.cost} credits`);
+        html += sectionEnd();
+    }
+    
+    if (isCannonType(type)) {
         html += sectionStart('Weapon');
         html += statRow('Firing Arc', formatDegrees(def.firingArc));
         html += statRow('Aiming Arc', formatDegrees(def.aimingArc));
@@ -91,10 +125,30 @@ function buildEquipmentStats(type, def) {
         html += statRow('Range', (def.projectileSpeed * def.projectileLifetime).toFixed(0));
         html += statRow('Reload', `${def.reloadTime.toFixed(1)}s`);
         html += sectionEnd();
-    } else if (type === 'thruster') {
+    } else if (isThrusterType(type)) {
         html += sectionStart('Thrust');
         html += statRow('Force', def.thrustForce);
+        if (def.sideThrust) {
+            html += statRow('Side Thrust', def.sideThrust.force);
+        }
+        if (def.backThrust) {
+            html += statRow('Back Thrust', def.backThrust.force);
+        }
         html += sectionEnd();
+        
+        // Special behaviors
+        if (def.rampUp || def.overheat) {
+            html += sectionStart('Behavior');
+            if (def.rampUp) {
+                html += statRow('Ramp Up', `${def.rampUp.rampTime.toFixed(1)}s`);
+                html += statRow('Start Power', `${Math.round(def.rampUp.startPercent * 100)}%`);
+            }
+            if (def.overheat) {
+                html += statRow('Overheat', `${Math.round(def.overheat.threshold * 100)}% use`);
+                html += statRow('Cooldown', `${def.overheat.cooldownTime.toFixed(1)}s`);
+            }
+            html += sectionEnd();
+        }
     }
     
     return html;

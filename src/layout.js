@@ -3,7 +3,7 @@
 
 import { getScene } from './scene.js';
 import { getGridConfig, gridToWorld } from './grid.js';
-import { PieceState, getPieceDefinition, removePiece } from './pieces/piece.js';
+import { PieceState, getPieceDefinition, removePiece, getGridZ, generatePieceId } from './pieces/piece.js';
 import { BLOCK_DEFINITIONS, createBlockMesh } from './pieces/blocks.js';
 import { EQUIPMENT_DEFINITIONS, createEquipmentMesh } from './pieces/equipment.js';
 import { CORE_DEFINITION, createCoreMesh } from './pieces/core.js';
@@ -12,11 +12,8 @@ import { CORE_DEFINITION, createCoreMesh } from './pieces/core.js';
 // Each item: { type: string, col: number, row: number, angle: number }
 let shipLayout = [];
 
-// Piece ID counter
-let pieceIdCounter = 0;
-function generatePieceId() {
-    return `piece_${++pieceIdCounter}`;
-}
+// Piece ID generation uses the shared counter from piece.js
+// to avoid duplicate IDs between layout-created and bin-created pieces
 
 /**
  * Gets the current ship layout (returns a copy)
@@ -127,7 +124,7 @@ function createPieceFromLayoutItem(item, layoutIndex, config, addToScene) {
     
     // Create visual mesh (use original dimensions for mesh)
     piece.mesh = createMeshForPiece(item.type, definition);
-    piece.mesh.position.set(worldX, worldY, 0);
+    piece.mesh.position.set(worldX, worldY, getGridZ(definition.category));
     piece.mesh.rotation.z = item.angle;
     
     if (addToScene) {
@@ -216,7 +213,7 @@ function updateLayoutItem(layoutIndex, changes, gameState) {
     piece.y = cellCenter.y + offsetY;
     
     // Update mesh
-    piece.mesh.position.set(piece.x, piece.y, 0);
+    piece.mesh.position.set(piece.x, piece.y, getGridZ(piece.category));
     piece.mesh.rotation.z = piece.angle;
 }
 

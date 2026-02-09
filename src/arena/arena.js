@@ -5,6 +5,7 @@ import { createArenaPhysics, stepArenaPhysics, clearArenaPhysics, getArenaDimens
 import { createArenaShip, syncShipMeshToBody, destroyArenaShip } from './arenaShip.js';
 import { setupArenaInput, removeArenaInput, getInputState, clearFireRequest } from './arenaInput.js';
 import { initThrustDebug, updateThrustDebug, cleanupThrustDebug, setThrustDebugEnabled } from './thrustDebug.js';
+import { updateThrusterState } from './thrustSystem.js';
 import { initTargetIndicator, setTargetPosition, updateTargetIndicator, cleanupTargetIndicator } from './targetIndicator.js';
 import { initWeaponSystem, cleanupWeaponSystem, updateWeaponSystem, checkProjectileCollisions, getProjectiles } from './weaponSystem.js';
 import { setDebugVisible } from '../debug.js';
@@ -430,6 +431,9 @@ function updateArena(deltaTime) {
             // Post-update for controller (clear one-shot inputs)
             ship.controller.postUpdate();
         }
+        
+        // Update thruster state (ramp-up timers, overheat tracking)
+        updateThrusterState(ship, deltaTime);
         
         // Update weapon system for this ship
         let aimTarget = null;

@@ -5,7 +5,7 @@ import { getScene } from '../scene.js';
 import { createPieceBody, removePieceBody } from '../physics.js';
 import { getRandomBinPosition } from '../bin.js';
 import { BLOCK_DEFINITIONS, createBlockMesh } from './blocks.js';
-import { EQUIPMENT_DEFINITIONS, createEquipmentMesh } from './equipment.js';
+import { EQUIPMENT_DEFINITIONS, createEquipmentMesh, resolveLegacyType } from './equipment.js';
 import { CORE_DEFINITION, createCoreMesh } from './core.js';
 
 // Piece categories
@@ -23,6 +23,17 @@ const PieceState = {
 };
 
 /**
+ * Returns the Z-offset for pieces on the grid.
+ * Equipment renders above blocks so the art doesn't intersect.
+ * @param {string} category - PieceCategory value
+ * @returns {number} Z position for the piece mesh
+ */
+function getGridZ(category) {
+    if (category === PieceCategory.EQUIPMENT) return 0.2;
+    return 0; // blocks, core
+}
+
+/**
  * Creates a new piece instance
  * @param {string} type - The piece type (e.g., 'block_1x1', 'cannon', 'core')
  * @param {number} x - Initial X position
@@ -30,15 +41,16 @@ const PieceState = {
  * @returns {object} The piece instance
  */
 function createPiece(type, x, y) {
-    const definition = getPieceDefinition(type);
+    const resolvedType = resolveLegacyType(type);
+    const definition = getPieceDefinition(resolvedType);
     if (!definition) {
-        console.error(`Unknown piece type: ${type}`);
+        console.error(`Unknown piece type: ${resolvedType}`);
         return null;
     }
     
     const piece = {
         id: generatePieceId(),
-        type: type,
+        type: resolvedType,
         category: definition.category,
         x: x,
         y: y,
@@ -77,9 +89,10 @@ function createPiece(type, x, y) {
  * @returns {object} The piece instance
  */
 function createPieceForGrid(type, col, row, angle) {
-    const definition = getPieceDefinition(type);
+    const resolvedType = resolveLegacyType(type);
+    const definition = getPieceDefinition(resolvedType);
     if (!definition) {
-        console.error(`Unknown piece type: ${type}`);
+        console.error(`Unknown piece type: ${resolvedType}`);
         return null;
     }
     
@@ -92,7 +105,7 @@ function createPieceForGrid(type, col, row, angle) {
     
     const piece = {
         id: generatePieceId(),
-        type: type,
+        type: resolvedType,
         category: definition.category,
         x: 0,
         y: 0,
@@ -129,16 +142,19 @@ function createPieceForGrid(type, col, row, angle) {
  * @returns {object|null} The piece definition
  */
 function getPieceDefinition(type) {
+    // Resolve legacy type keys (e.g. 'thruster' -> 'thruster_axiom_pd7')
+    const resolvedType = resolveLegacyType(type);
+    
     // Check blocks
-    if (BLOCK_DEFINITIONS[type]) {
-        return { ...BLOCK_DEFINITIONS[type], category: PieceCategory.BLOCK };
+    if (BLOCK_DEFINITIONS[resolvedType]) {
+        return { ...BLOCK_DEFINITIONS[resolvedType], category: PieceCategory.BLOCK };
     }
     // Check equipment
-    if (EQUIPMENT_DEFINITIONS[type]) {
-        return { ...EQUIPMENT_DEFINITIONS[type], category: PieceCategory.EQUIPMENT };
+    if (EQUIPMENT_DEFINITIONS[resolvedType]) {
+        return { ...EQUIPMENT_DEFINITIONS[resolvedType], category: PieceCategory.EQUIPMENT };
     }
     // Check core
-    if (type === 'core') {
+    if (resolvedType === 'core') {
         return { ...CORE_DEFINITION, category: PieceCategory.CORE };
     }
     return null;
@@ -180,7 +196,7 @@ function removePiece(piece) {
     }
 }
 
-// Simple ID generator
+// Simple ID generator (shared across all piece creation paths)
 let pieceIdCounter = 0;
 function generatePieceId() {
     return `piece_${++pieceIdCounter}`;
@@ -195,14 +211,13 @@ function generatePieceId() {
 function spawnInitialParts(gameState, options = {}) {
     const { skipDefaultShipParts = false } = options;
     
-    // Full parts list when spawning everything
+    // Full parts list when spawning everything (matches starter preset)
     const fullPartsList = [
         'core',
-        'block_1x1', 'block_1x1', 'block_1x1',
-        'block_2x1', 'block_2x1',
-        'block_2x2',
-        'cannon', 'cannon',
-        'thruster', 'thruster', 'thruster', 'thruster'
+        'block_scrap_1x1', 'block_scrap_1x1',
+        'block_scrap_2x1',
+        'cannon_popgun',
+        'thruster_rustbucket', 'thruster_rustbucket'
     ];
     
     // Extra parts not in default ship (spawned in bin when default ship is placed)
@@ -223,9 +238,11 @@ function spawnInitialParts(gameState, options = {}) {
 export {
     PieceCategory,
     PieceState,
+    getGridZ,
     createPiece,
     createPieceForGrid,
     getPieceDefinition,
     removePiece,
-    spawnInitialParts
+    spawnInitialParts,
+    generatePieceId
 };

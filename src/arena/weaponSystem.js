@@ -3,11 +3,11 @@
 import * as THREE from 'three';
 import { getArenaPhysicsScale } from './arenaPhysics.js';
 import { applyBrokenTint } from './arenaShip.js';
-import { EQUIPMENT_DEFINITIONS } from '../pieces/equipment.js';
+import { EQUIPMENT_DEFINITIONS, isThrusterType, isCannonType } from '../pieces/equipment.js';
 import { normalizeAngle, rotateVector, angleTo, getEquipmentForward } from '../math.js';
 
 // Default cannon damage (used if not specified)
-const DEFAULT_CANNON_DAMAGE = EQUIPMENT_DEFINITIONS.cannon.damage;
+const DEFAULT_CANNON_DAMAGE = EQUIPMENT_DEFINITIONS.cannon_thumper.damage;
 
 // Active projectiles in the arena
 const projectiles = [];
@@ -45,14 +45,54 @@ function cleanupWeaponSystem() {
 }
 
 /**
- * Updates reload timers for all cannons on a ship
+ * Updates reload timers and burst firing for all cannons on a ship
  * @param {object} ship - Arena ship with cannons array
  * @param {number} deltaTime - Time since last frame in seconds
  */
 function updateCannonReloads(ship, deltaTime) {
     if (!ship || !ship.cannons) return;
     
+    const scale = getArenaPhysicsScale();
+    const shipX = ship.body.position.x / scale;
+    const shipY = -ship.body.position.y / scale;
+    const shipAngle = -ship.body.angle;
+    const shipVelX = ship.body.velocity.x;
+    const shipVelY = -ship.body.velocity.y;
+    
     for (const cannon of ship.cannons) {
+        // Handle burst firing -- fire remaining burst shots on a timer
+        if (cannon.burstRemaining > 0) {
+            cannon.burstTimer -= deltaTime;
+            if (cannon.burstTimer <= 0 && !cannon.disabled) {
+                // Compute current world position for this burst shot
+                const rotatedLocal = rotateVector(cannon.localPos, shipAngle);
+                const worldX = shipX + rotatedLocal.x;
+                const worldY = shipY + rotatedLocal.y;
+                
+                // Fire with current aim offset + spread
+                const firingAngle = shipAngle + cannon.localAngle + cannon.currentAimOffset;
+                const spreadAngle = firingAngle + (Math.random() * 2 - 1) * (cannon.spread || 0);
+                
+                spawnProjectile(
+                    worldX, worldY, spreadAngle,
+                    cannon.projectileSpeed, cannon.projectileLifetime,
+                    shipVelX, shipVelY,
+                    ship,
+                    cannon.damage ?? DEFAULT_CANNON_DAMAGE,
+                    cannon.penetrating || false
+                );
+                
+                cannon.burstRemaining--;
+                if (cannon.burstRemaining > 0) {
+                    cannon.burstTimer = cannon.burstDelay || 0;
+                } else {
+                    // Burst complete -- start reload
+                    cannon.reloadTimer = cannon.reloadTime;
+                }
+            }
+            continue;  // Don't tick reload while bursting
+        }
+        
         if (cannon.reloadTimer > 0) {
             cannon.reloadTimer -= deltaTime;
         }
@@ -160,6 +200,9 @@ function fireAllCannons(ship, targetPos) {
         // Skip disabled cannons (on broken blocks)
         if (cannon.disabled) continue;
         
+        // Skip cannons mid-burst (burst shots handled in updateCannonReloads)
+        if (cannon.burstRemaining > 0) continue;
+        
         // Check if cannon is ready to fire
         if (cannon.reloadTimer > 0) continue;
         
@@ -185,17 +228,29 @@ function fireAllCannons(ship, targetPos) {
         // Calculate firing direction (cannon local angle + ship angle + aim offset)
         const firingAngle = shipAngle + cannon.localAngle + cannon.currentAimOffset;
         
+        // Apply spread -- random deviation within [-spread, +spread]
+        const spreadAngle = firingAngle + (Math.random() * 2 - 1) * (cannon.spread || 0);
+        
         // Spawn projectile with ship velocity for inheritance, shooter reference, and damage
         spawnProjectile(
-            worldX, worldY, firingAngle,
+            worldX, worldY, spreadAngle,
             cannon.projectileSpeed, cannon.projectileLifetime,
             shipVelX, shipVelY,
             ship,  // shooter reference
-            cannon.damage ?? DEFAULT_CANNON_DAMAGE
+            cannon.damage ?? DEFAULT_CANNON_DAMAGE,
+            cannon.penetrating || false
         );
         
-        // Start reload timer
-        cannon.reloadTimer = cannon.reloadTime;
+        // Handle burst -- if burstCount > 1, queue remaining shots
+        const burstCount = cannon.burstCount || 1;
+        if (burstCount > 1) {
+            cannon.burstRemaining = burstCount - 1;
+            cannon.burstTimer = cannon.burstDelay || 0;
+            // Reload starts after burst completes (handled in updateCannonReloads)
+        } else {
+            // Single shot -- start reload immediately
+            cannon.reloadTimer = cannon.reloadTime;
+        }
         firedCount++;
     }
     
@@ -213,8 +268,9 @@ function fireAllCannons(ship, targetPos) {
  * @param {number} shipVelY - Ship velocity Y component (optional)
  * @param {object} shooter - The ship that fired this projectile (to avoid self-hits)
  * @param {number} damage - Damage this projectile deals on hit
+ * @param {boolean} penetrating - If true, projectile continues through parts until damage is depleted
  */
-function spawnProjectile(x, y, angle, speed, lifetime, shipVelX = 0, shipVelY = 0, shooter = null, damage = DEFAULT_CANNON_DAMAGE) {
+function spawnProjectile(x, y, angle, speed, lifetime, shipVelX = 0, shipVelY = 0, shooter = null, damage = DEFAULT_CANNON_DAMAGE, penetrating = false) {
     // Create mesh
     const geometry = new THREE.SphereGeometry(PROJECTILE_RADIUS, 8, 8);
     const material = new THREE.MeshStandardMaterial({
@@ -259,8 +315,9 @@ function spawnProjectile(x, y, angle, speed, lifetime, shipVelX = 0, shipVelY = 
         vy: vy,
         timeAlive: 0,
         lifetime: lifetime,
-        shooter: shooter,  // Track shooter to avoid self-hits
-        damage: damage     // Damage dealt on hit
+        shooter: shooter,      // Track shooter to avoid self-hits
+        damage: damage,        // Damage dealt on hit (decremented for penetrating projectiles)
+        penetrating: penetrating  // If true, continues through parts until damage depleted
     };
     
     projectiles.push(projectile);
@@ -386,7 +443,7 @@ function applyDamageToPart(ship, part, damage) {
  */
 function disableEquipmentOnPiece(ship, piece) {
     // Check if this piece IS equipment (cannon or thruster)
-    if (piece.type === 'cannon') {
+    if (isCannonType(piece.type)) {
         for (const cannon of ship.cannons) {
             if (cannon.piece.id === piece.id) {
                 cannon.disabled = true;
@@ -396,7 +453,7 @@ function disableEquipmentOnPiece(ship, piece) {
         }
     }
     
-    if (piece.type === 'thruster') {
+    if (isThrusterType(piece.type)) {
         for (const thruster of ship.thrusters) {
             if (thruster.piece.id === piece.id) {
                 thruster.disabled = true;
@@ -461,6 +518,7 @@ function piecesOverlap(col1, row1, w1, h1, col2, row2, w2, h2) {
 
 /**
  * Checks all projectiles for collisions with ships and applies damage
+ * Penetrating projectiles continue through parts until their damage is depleted.
  * @param {Array} ships - Array of arena ships
  * @returns {Array} Array of ships that were destroyed this frame
  */
@@ -472,7 +530,7 @@ function checkProjectileCollisions(ships) {
     // Check each projectile (iterate backwards for safe removal)
     for (let i = projectiles.length - 1; i >= 0; i--) {
         const proj = projectiles[i];
-        let hit = false;
+        let shouldRemove = false;
         
         // Check against each ship
         for (const ship of ships) {
@@ -486,20 +544,41 @@ function checkProjectileCollisions(ships) {
             const hitPart = findHitPart(ship, proj.x, proj.y);
             
             if (hitPart) {
-                // Apply damage to the hit part
-                const result = applyDamageToPart(ship, hitPart, proj.damage);
-                
-                if (result.coreDestroyed) {
-                    destroyedShips.push(ship);
+                if (proj.penetrating) {
+                    // Penetrating projectile: reduce damage by HP absorbed
+                    const hpBefore = hitPart.hp;
+                    const result = applyDamageToPart(ship, hitPart, proj.damage);
+                    
+                    if (result.coreDestroyed) {
+                        destroyedShips.push(ship);
+                    }
+                    
+                    // Subtract the HP the part actually absorbed
+                    const hpAbsorbed = Math.min(hpBefore, proj.damage);
+                    proj.damage -= hpAbsorbed;
+                    
+                    // If no damage left, mark for removal
+                    if (proj.damage <= 0) {
+                        shouldRemove = true;
+                        break;
+                    }
+                    // Otherwise continue checking other parts/ships
+                } else {
+                    // Normal projectile: apply damage and remove
+                    const result = applyDamageToPart(ship, hitPart, proj.damage);
+                    
+                    if (result.coreDestroyed) {
+                        destroyedShips.push(ship);
+                    }
+                    
+                    shouldRemove = true;
+                    break;  // Non-penetrating projectile stops on first hit
                 }
-                
-                hit = true;
-                break;  // Projectile can only hit one part
             }
         }
         
-        // Remove projectile if it hit something
-        if (hit) {
+        // Remove projectile if it should be removed
+        if (shouldRemove) {
             removeProjectile(i);
         }
     }

@@ -5,6 +5,8 @@ import { pickUpPiece, updateDraggingPiece, dropPiece, rotatePiece } from './plac
 import { getPhysicsScale } from './physics.js';
 import { showStats, hideStats } from './statsPanel.js';
 import { isArenaActive } from './arena/arena.js';
+import { PieceCategory } from './pieces/piece.js';
+import { isInsideSellZone, setSellZoneHover, handleSellPiece } from './shop.js';
 
 let gameStateRef = null;
 let hoveredPiece = null;
@@ -24,6 +26,9 @@ function setupInput(gameState) {
     
     // Prevent context menu on right-click
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+    // Listen for shop drag-to-buy events
+    document.addEventListener('shop-piece-bought', onShopPieceBought);
 }
 
 /**
@@ -56,6 +61,58 @@ function onMouseDown(event) {
 }
 
 /**
+ * Handles a piece bought from the shop: starts dragging it immediately.
+ * @param {CustomEvent} event - shop-piece-bought event with { piece, originalEvent }
+ */
+function onShopPieceBought(event) {
+    if (isArenaActive()) return;
+    const { piece, originalEvent } = event.detail;
+    if (!piece) return;
+
+    const worldPos = screenToWorld(originalEvent.clientX, originalEvent.clientY);
+    gameStateRef.selectedPiece = piece;
+    gameStateRef.dragging = true;
+    pickUpPiece(piece, worldPos.x, worldPos.y, gameStateRef);
+
+    // Start listening on the *document* for move/up since the mousedown
+    // originated outside the canvas (on the shop panel DOM).
+    document.addEventListener('mousemove', onDocMouseMoveDuringShopDrag);
+    document.addEventListener('mouseup', onDocMouseUpDuringShopDrag);
+}
+
+/** Global move handler while dragging a shop-bought piece */
+function onDocMouseMoveDuringShopDrag(event) {
+    if (!gameStateRef.dragging || !gameStateRef.selectedPiece) return;
+    const worldPos = screenToWorld(event.clientX, event.clientY);
+    updateDraggingPiece(gameStateRef.selectedPiece, worldPos.x, worldPos.y);
+    // Update sell zone hover highlight
+    setSellZoneHover(isInsideSellZone(event.clientX, event.clientY));
+}
+
+/** Global mouseup handler while dragging a shop-bought piece */
+function onDocMouseUpDuringShopDrag(event) {
+    document.removeEventListener('mousemove', onDocMouseMoveDuringShopDrag);
+    document.removeEventListener('mouseup', onDocMouseUpDuringShopDrag);
+    if (event.button !== 0) return;
+    if (!gameStateRef.dragging || !gameStateRef.selectedPiece) return;
+
+    const piece = gameStateRef.selectedPiece;
+    const worldPos = screenToWorld(event.clientX, event.clientY);
+
+    // Check sell zone
+    if (isInsideSellZone(event.clientX, event.clientY)) {
+        setSellZoneHover(false);
+        handleSellPiece(piece, gameStateRef);
+    } else {
+        setSellZoneHover(false);
+        dropPiece(piece, worldPos.x, worldPos.y, gameStateRef);
+    }
+
+    gameStateRef.selectedPiece = null;
+    gameStateRef.dragging = false;
+}
+
+/**
  * Mouse move - update dragging piece position and stats panel
  */
 function onMouseMove(event) {
@@ -70,6 +127,8 @@ function onMouseMove(event) {
     // Update dragging if active
     if (gameStateRef.dragging && gameStateRef.selectedPiece) {
         updateDraggingPiece(gameStateRef.selectedPiece, worldPos.x, worldPos.y);
+        // Update sell zone hover highlight
+        setSellZoneHover(isInsideSellZone(event.clientX, event.clientY));
     }
 }
 
@@ -102,8 +161,20 @@ function onMouseUp(event) {
     if (event.button !== 0) return;
     if (!gameStateRef.dragging || !gameStateRef.selectedPiece) return;
     
+    const piece = gameStateRef.selectedPiece;
     const worldPos = screenToWorld(event.clientX, event.clientY);
-    dropPiece(gameStateRef.selectedPiece, worldPos.x, worldPos.y, gameStateRef);
+
+    // Check sell zone first
+    if (isInsideSellZone(event.clientX, event.clientY)) {
+        setSellZoneHover(false);
+        if (!handleSellPiece(piece, gameStateRef)) {
+            // Can't sell (e.g. core) — drop normally
+            dropPiece(piece, worldPos.x, worldPos.y, gameStateRef);
+        }
+    } else {
+        setSellZoneHover(false);
+        dropPiece(piece, worldPos.x, worldPos.y, gameStateRef);
+    }
     
     gameStateRef.selectedPiece = null;
     gameStateRef.dragging = false;
@@ -111,26 +182,32 @@ function onMouseUp(event) {
 
 /**
  * Finds a piece at the given world position using bounds checking
+ * Equipment is checked before blocks so it is selected first (it renders on top).
  * @param {number} worldX - World X position
  * @param {number} worldY - World Y position
  * @returns {object|null} The piece at the position, or null
  */
 function findPieceAtPosition(worldX, worldY) {
     // Check all pieces using their known bounds (more reliable than raycasting)
-    // Check in reverse order so pieces rendered on top are picked first
-    for (let i = gameStateRef.pieces.length - 1; i >= 0; i--) {
-        const piece = gameStateRef.pieces[i];
-        if (!piece.mesh) continue;
-        
-        // Use physics bounds if piece has a body (accounts for rotation)
-        if (piece.body) {
-            if (isPointInPhysicsBody(worldX, worldY, piece.body)) {
-                return piece;
-            }
-        } else {
-            // Fallback to axis-aligned bounds for grid pieces (no physics body)
-            if (isPointInAxisAlignedBounds(worldX, worldY, piece)) {
-                return piece;
+    // Two passes: equipment first (renders on top), then everything else
+    for (let pass = 0; pass < 2; pass++) {
+        const wantEquipment = pass === 0;
+        for (let i = gameStateRef.pieces.length - 1; i >= 0; i--) {
+            const piece = gameStateRef.pieces[i];
+            if (!piece.mesh) continue;
+            const isEquipment = piece.category === PieceCategory.EQUIPMENT;
+            if (wantEquipment !== isEquipment) continue;
+            
+            // Use physics bounds if piece has a body (accounts for rotation)
+            if (piece.body) {
+                if (isPointInPhysicsBody(worldX, worldY, piece.body)) {
+                    return piece;
+                }
+            } else {
+                // Fallback to axis-aligned bounds for grid pieces (no physics body)
+                if (isPointInAxisAlignedBounds(worldX, worldY, piece)) {
+                    return piece;
+                }
             }
         }
     }

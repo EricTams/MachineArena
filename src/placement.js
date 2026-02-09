@@ -9,8 +9,9 @@
 import { worldToGrid, gridToWorld, isWithinGrid, getGridConfig } from './grid.js';
 import { createPieceBody, removePieceBody, setBodyAngle } from './physics.js';
 import { getBinBounds, getRandomBinPosition } from './bin.js';
-import { PieceCategory, PieceState } from './pieces/piece.js';
-import { addPieceToLayout, removePieceFromLayout, updatePieceInLayout } from './layout.js';
+import { PieceCategory, PieceState, getGridZ } from './pieces/piece.js';
+import { addPieceToLayout, removePieceFromLayout, updatePieceInLayout, getShipLayout } from './layout.js';
+import { saveInventory } from './run.js';
 
 /**
  * Attempts to place a piece on the grid
@@ -202,7 +203,7 @@ function placePieceOnGrid(piece, col, row, gameState) {
     const offsetY = (piece.height - 1) * 0.5;
     piece.x = worldPos.x + offsetX;
     piece.y = worldPos.y + offsetY;
-    piece.mesh.position.set(piece.x, piece.y, 0);
+    piece.mesh.position.set(piece.x, piece.y, getGridZ(piece.category));
     piece.mesh.rotation.z = piece.angle;
     
     // Add to grid pieces if not already there
@@ -259,11 +260,11 @@ function movePieceToBin(piece, gameState, options = {}) {
             spawnY = pos.y;
         }
         
-        // Get original (un-swapped) dimensions for physics body
-        // Piece dimensions are swapped when rotated, but physics body uses original + angle
-        const isOddRotation = Math.abs(Math.round(piece.angle / (Math.PI / 2))) % 2 === 1;
-        const bodyWidth = isOddRotation ? piece.height : piece.width;
-        const bodyHeight = isOddRotation ? piece.width : piece.height;
+        // Always use the original definition dimensions for the physics body.
+        // The body's own angle handles the rotation, so we never need to swap here.
+        // This avoids bugs when piece.width/height are in an inconsistent state.
+        const bodyWidth = piece.definition.width;
+        const bodyHeight = piece.definition.height;
         
         piece.body = createPieceBody(spawnX, spawnY, bodyWidth, bodyHeight, {
             mass: piece.mass
@@ -348,13 +349,11 @@ function pickUpPiece(piece, worldX, worldY, gameState) {
         const snapped = snapAngleTo90(piece.angle);
         const isOddRotation = snapped.rotations % 2 === 1;
         
-        // Swap dimensions if rotated to 90° or 270°
-        // (bin pieces have original dimensions, rotation is purely visual from physics)
-        if (isOddRotation) {
-            const temp = piece.width;
-            piece.width = piece.height;
-            piece.height = temp;
-        }
+        // Compute dimensions from the original definition + snapped rotation.
+        // We must NOT toggle-swap piece.width/height because they may already be
+        // swapped from a previous pick-up cycle, causing a cumulative mismatch.
+        piece.width  = isOddRotation ? piece.definition.height : piece.definition.width;
+        piece.height = isOddRotation ? piece.definition.width  : piece.definition.height;
         
         piece.angle = snapped.angle;
         piece.mesh.rotation.z = snapped.angle;
@@ -410,10 +409,13 @@ function updateDraggingPiece(piece, worldX, worldY) {
  * Drops a piece (after dragging)
  */
 function dropPiece(piece, worldX, worldY, gameState) {
-    piece.mesh.position.z = 0;
+    piece.mesh.position.z = getGridZ(piece.category);
     
     // Try to place on grid, otherwise goes to bin (which creates physics body)
     tryPlacePiece(piece, worldX, worldY, gameState);
+
+    // Persist inventory so grid/bin state survives a reload
+    saveInventory(getShipLayout(), gameState.binPieces.map(p => p.type));
 }
 
 /**
@@ -455,7 +457,7 @@ function rotatePiece(piece, gameState) {
             const offsetY = (piece.height - 1) * 0.5;
             piece.x = worldPos.x + offsetX;
             piece.y = worldPos.y + offsetY;
-            piece.mesh.position.set(piece.x, piece.y, 0);
+            piece.mesh.position.set(piece.x, piece.y, getGridZ(piece.category));
             
             // Update layout with new angle (source of truth)
             if (piece.layoutIndex !== null && piece.layoutIndex !== undefined) {
@@ -471,6 +473,9 @@ function rotatePiece(piece, gameState) {
             }
         }
     }
+
+    // Persist inventory so rotation changes survive a reload
+    saveInventory(getShipLayout(), gameState.binPieces.map(p => p.type));
 }
 
 export {

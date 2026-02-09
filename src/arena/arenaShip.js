@@ -2,7 +2,7 @@
 
 import * as THREE from 'three';
 import { addToArena, removeFromArena, getArenaPhysicsScale } from './arenaPhysics.js';
-import { EQUIPMENT_DEFINITIONS } from '../pieces/equipment.js';
+import { EQUIPMENT_DEFINITIONS, isThrusterType, isCannonType } from '../pieces/equipment.js';
 import { CORE_DEFINITION } from '../pieces/core.js';
 import { getEquipmentForward } from '../math.js';
 
@@ -201,23 +201,84 @@ function buildBodyParts(gridPieces, com) {
         });
         
         // Track thrusters for force application
-        if (piece.type === 'thruster') {
-            const thrusterDef = EQUIPMENT_DEFINITIONS.thruster;
-            thrusters.push({
+        if (isThrusterType(piece.type)) {
+            const thrusterDef = piece.definition || EQUIPMENT_DEFINITIONS[piece.type];
+            const mainExhaustDir = getEquipmentForward(piece.angle);
+            
+            const mainThruster = {
                 piece: piece,
                 localPos: { x: localX, y: localY },
                 localAngle: piece.angle,
                 thrustForce: thrusterDef.thrustForce,
                 // Exhaust direction = equipment forward = +Y in local space at angle 0
                 // Ship is pushed opposite to exhaust direction
-                exhaustDir: getEquipmentForward(piece.angle),
-                disabled: false  // Set to true when supporting block breaks
-            });
+                exhaustDir: mainExhaustDir,
+                disabled: false,  // Set to true when supporting block breaks
+                isVirtual: false,
+                parentThruster: null,
+                // Behavior config (used by thrustSystem for ramp-up / overheat)
+                rampUp: thrusterDef.rampUp || null,
+                overheat: thrusterDef.overheat || null,
+                // Runtime state for behaviors
+                activeTime: 0,         // How long thruster has been continuously firing
+                firedThisFrame: false,  // Reset each frame, set by thrust application
+                usageHistory: [],       // Sliding window for overheat tracking
+                overheated: false,      // Set to true during cooldown
+                cooldownTimer: 0        // Remaining cooldown time
+            };
+            thrusters.push(mainThruster);
+            
+            // Inject virtual thruster for side thrust
+            if (thrusterDef.sideThrust) {
+                const sideAngle = piece.angle + thrusterDef.sideThrust.angleOffset;
+                const sideExhaustDir = getEquipmentForward(sideAngle);
+                thrusters.push({
+                    piece: piece,
+                    localPos: { x: localX, y: localY },
+                    localAngle: sideAngle,
+                    thrustForce: thrusterDef.sideThrust.force,
+                    exhaustDir: sideExhaustDir,
+                    disabled: false,
+                    isVirtual: true,
+                    parentThruster: mainThruster,
+                    // Virtual thrusters share parent's behavior config
+                    rampUp: thrusterDef.rampUp || null,
+                    overheat: thrusterDef.overheat || null,
+                    activeTime: 0,
+                    firedThisFrame: false,
+                    usageHistory: [],
+                    overheated: false,
+                    cooldownTimer: 0
+                });
+            }
+            
+            // Inject virtual thruster for back thrust
+            if (thrusterDef.backThrust) {
+                const backAngle = piece.angle + thrusterDef.backThrust.angleOffset;
+                const backExhaustDir = getEquipmentForward(backAngle);
+                thrusters.push({
+                    piece: piece,
+                    localPos: { x: localX, y: localY },
+                    localAngle: backAngle,
+                    thrustForce: thrusterDef.backThrust.force,
+                    exhaustDir: backExhaustDir,
+                    disabled: false,
+                    isVirtual: true,
+                    parentThruster: mainThruster,
+                    rampUp: thrusterDef.rampUp || null,
+                    overheat: thrusterDef.overheat || null,
+                    activeTime: 0,
+                    firedThisFrame: false,
+                    usageHistory: [],
+                    overheated: false,
+                    cooldownTimer: 0
+                });
+            }
         }
         
         // Track cannons for weapon system
-        if (piece.type === 'cannon') {
-            const cannonDef = EQUIPMENT_DEFINITIONS.cannon;
+        if (isCannonType(piece.type)) {
+            const cannonDef = piece.definition || EQUIPMENT_DEFINITIONS[piece.type];
             cannons.push({
                 piece: piece,
                 localPos: { x: localX, y: localY },
@@ -230,9 +291,18 @@ function buildBodyParts(gridPieces, com) {
                 projectileLifetime: cannonDef.projectileLifetime,
                 reloadTime: cannonDef.reloadTime,
                 damage: cannonDef.damage,
+                // Spread
+                spread: cannonDef.spread || 0,
+                // Burst
+                burstCount: cannonDef.burstCount || 1,
+                burstDelay: cannonDef.burstDelay || 0,
+                // Penetration
+                penetrating: cannonDef.penetrating || false,
                 // Runtime state
                 currentAimOffset: 0,    // Current turret rotation offset from base angle
                 reloadTimer: 0,         // Time until can fire again
+                burstRemaining: 0,      // Shots left in current burst
+                burstTimer: 0,          // Countdown to next burst shot
                 disabled: false         // Set to true when supporting block breaks
             });
         }
@@ -297,7 +367,7 @@ function createShipMesh(gridPieces, com, cannons, parts) {
         }
         
         // If this is a cannon, find and store the turret mesh reference
-        if (piece.type === 'cannon') {
+        if (isCannonType(piece.type)) {
             const cannonData = cannonsByPieceId.get(piece.id);
             if (cannonData) {
                 const turret = clonedMesh.getObjectByName('turret');

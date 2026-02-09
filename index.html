@@ -355,7 +355,7 @@
         .status-dot.online { background: #48bb78; }
         .status-dot.offline { background: #a0aec0; }
         .status-dot.connecting { background: #ecc94b; }
-        /* Start button */
+        /* Start / Continue / New Run buttons */
         .landing-btn {
             padding: 12px 36px;
             border: none;
@@ -375,6 +375,51 @@
         }
         .landing-btn.primary:hover {
             background: linear-gradient(135deg, #ffd633, #ffaa22);
+        }
+        .landing-btn.secondary {
+            background: #4a5568;
+            color: #e2e8f0;
+        }
+        .landing-btn.secondary:hover {
+            background: #5a6578;
+        }
+        .landing-btn-row {
+            display: flex;
+            gap: 12px;
+            margin-top: 4px;
+        }
+        /* Existing run info block on landing screen */
+        #landing-run-info {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+        #landing-run-info.active {
+            display: flex;
+        }
+        #landing-run-ship {
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 24px;
+            color: #ffcc00;
+            margin-bottom: 6px;
+        }
+        #landing-run-stage {
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 14px;
+            color: #a0aec0;
+            margin-bottom: 4px;
+        }
+        #landing-run-money {
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 13px;
+            color: #48bb78;
+        }
+        /* New ship name wrapper (shown for new runs) */
+        #landing-new-ship {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
         }
         /* Loading bar (inside landing screen) */
         #landing-loading {
@@ -898,6 +943,18 @@
             color: #48bb78;
             border-color: rgba(72, 187, 120, 0.4);
         }
+
+        /* Money display in toolbar */
+        #money-display {
+            padding: 8px 14px;
+            background: rgba(26, 32, 44, 0.85);
+            border: 1px solid #4a5568;
+            border-radius: 4px;
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 14px;
+            color: #48bb78;
+            white-space: nowrap;
+        }
     </style>
 </head>
 <body>
@@ -917,7 +974,7 @@
     <div id="landing-screen">
         <div id="landing-title">Machine Arena</div>
         <div id="landing-subtitle">Design. Train. Fight.</div>
-        <div id="landing-version">v0.2 &mdash; Feb 7, 2026 7:05 PM</div>
+        <div id="landing-version">v0.2 &mdash; Feb 9, 2026 9:12 AM</div>
         
         <!-- Loading bar (shown first while systems initialize) -->
         <div id="landing-loading" class="active">
@@ -932,16 +989,31 @@
             <div id="landing-callsign-label">Pilot Name</div>
             <input type="text" id="landing-player-name" placeholder="Enter your name..." maxlength="40" />
             
-            <div id="landing-ship-label">Ship Name</div>
-            <div id="landing-ship-name"></div>
-            <button id="landing-reroll-btn">Reroll</button>
+            <!-- Existing run info (shown when a valid run exists) -->
+            <div id="landing-run-info">
+                <div id="landing-run-ship"></div>
+                <div id="landing-run-stage"></div>
+                <div id="landing-run-money"></div>
+            </div>
+
+            <!-- New ship name (shown when no valid run exists) -->
+            <div id="landing-new-ship" style="display:none">
+                <div id="landing-ship-label">Ship Name</div>
+                <div id="landing-ship-name"></div>
+                <button id="landing-reroll-btn">Reroll</button>
+            </div>
             
             <div id="landing-status">
                 <span class="status-dot connecting"></span>
                 <span id="landing-status-text">Checking connection...</span>
             </div>
             
-            <button class="landing-btn primary" id="landing-start-btn">Start</button>
+            <!-- Buttons: Continue + New Run  OR  Start New Run -->
+            <div class="landing-btn-row" id="landing-continue-btns" style="display:none">
+                <button class="landing-btn primary" id="landing-continue-btn">Continue</button>
+                <button class="landing-btn secondary" id="landing-newrun-btn">New Run</button>
+            </div>
+            <button class="landing-btn primary" id="landing-start-btn" style="display:none">Start New Run</button>
         </div>
     </div>
     
@@ -962,8 +1034,12 @@
         </ol>
     </div>
     
+    <!-- Shop panel (right side, populated by shop.js) -->
+    <div id="shop-panel" style="display:none"></div>
+
     <!-- Main toolbar (gameplay) -->
     <div id="toolbar" style="display:none">
+        <span id="money-display">0 cr</span>
         <span class="toolbar-btn" id="stage-indicator" style="opacity:0.85;">Stage 1</span>
         <button class="toolbar-btn primary" id="fight-btn">FIGHT!</button>
     </div>

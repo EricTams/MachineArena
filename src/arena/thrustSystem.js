@@ -7,14 +7,44 @@ import { rotateVector, angleDiff, dot, length, normalize } from '../math.js';
 const Body = Matter.Body;
 
 /**
+ * Checks if a thruster is currently unable to fire (disabled or overheated)
+ * @param {object} thruster - Thruster info from ship.thrusters
+ * @returns {boolean} True if thruster cannot fire
+ */
+function isThrusterInactive(thruster) {
+    return thruster.disabled || thruster.overheated;
+}
+
+/**
+ * Calculates the ramp-up multiplier for a thruster based on its active time
+ * @param {object} thruster - Thruster info from ship.thrusters
+ * @returns {number} Multiplier between startPercent and 1.0
+ */
+function getRampUpMultiplier(thruster) {
+    if (!thruster.rampUp) return 1.0;
+    
+    const { startPercent, rampTime } = thruster.rampUp;
+    if (thruster.activeTime >= rampTime) return 1.0;
+    
+    // Linear interpolation from startPercent to 1.0 over rampTime
+    const t = thruster.activeTime / rampTime;
+    return startPercent + (1.0 - startPercent) * t;
+}
+
+/**
  * Applies thrust from a specific thruster
  * Force is applied at thruster position, creating torque if off-center
+ * Accounts for ramp-up scaling and marks thruster as fired this frame
  * @param {object} ship - Arena ship object
  * @param {object} thruster - Thruster info from ship.thrusters
  * @param {number} throttle - Throttle value 0-1
  */
 function applyThrusterForce(ship, thruster, throttle) {
     if (!ship || !ship.body || !thruster || throttle <= 0) return;
+    if (isThrusterInactive(thruster)) return;
+    
+    // Mark as fired this frame (for ramp-up and overheat tracking)
+    thruster.firedThisFrame = true;
     
     // Get world position of thruster (local pos rotated by ship angle + ship position)
     const worldPos = getWorldPositionFromLocal(ship, thruster.localPos);
@@ -26,8 +56,9 @@ function applyThrusterForce(ship, thruster, throttle) {
     // Push direction is opposite to exhaust direction (Newton's third law)
     const pushDir = { x: -exhaustWorldDir.x, y: -exhaustWorldDir.y };
     
-    // Calculate force magnitude
-    const forceMagnitude = thruster.thrustForce * throttle;
+    // Calculate force magnitude with ramp-up scaling
+    const rampMultiplier = getRampUpMultiplier(thruster);
+    const forceMagnitude = thruster.thrustForce * throttle * rampMultiplier;
     
     // Apply force at position (in push direction)
     const force = {
@@ -36,6 +67,82 @@ function applyThrusterForce(ship, thruster, throttle) {
     };
     
     applyForceAtPosition(ship.body, worldPos, force);
+}
+
+/**
+ * Updates per-thruster runtime state: ramp-up timers, overheat tracking, cooldowns.
+ * Should be called once per frame AFTER all thrust application is done.
+ * @param {object} ship - Arena ship object
+ * @param {number} dt - Delta time in seconds
+ */
+function updateThrusterState(ship, dt) {
+    if (!ship || !ship.thrusters) return;
+    
+    const now = performance.now() / 1000; // Current time in seconds
+    
+    for (const thruster of ship.thrusters) {
+        // --- Ramp-up tracking ---
+        if (thruster.rampUp) {
+            if (thruster.firedThisFrame) {
+                thruster.activeTime += dt;
+            } else {
+                // Reset ramp when not firing
+                thruster.activeTime = 0;
+            }
+        }
+        
+        // --- Overheat tracking ---
+        if (thruster.overheat) {
+            // If currently in cooldown, count down
+            if (thruster.overheated) {
+                thruster.cooldownTimer -= dt;
+                if (thruster.cooldownTimer <= 0) {
+                    thruster.overheated = false;
+                    thruster.cooldownTimer = 0;
+                    thruster.usageHistory = []; // Clear history on recovery
+                }
+            } else {
+                // Record usage this frame
+                thruster.usageHistory.push({
+                    time: now,
+                    fired: thruster.firedThisFrame ? 1 : 0
+                });
+                
+                // Trim history to window
+                const windowStart = now - thruster.overheat.windowSeconds;
+                while (thruster.usageHistory.length > 0 && thruster.usageHistory[0].time < windowStart) {
+                    thruster.usageHistory.shift();
+                }
+                
+                // Calculate usage ratio over the window
+                if (thruster.usageHistory.length > 0) {
+                    let firedCount = 0;
+                    for (const entry of thruster.usageHistory) {
+                        firedCount += entry.fired;
+                    }
+                    const usageRatio = firedCount / thruster.usageHistory.length;
+                    
+                    // Check if over threshold
+                    if (usageRatio > thruster.overheat.threshold) {
+                        thruster.overheated = true;
+                        thruster.cooldownTimer = thruster.overheat.cooldownTime;
+                        thruster.activeTime = 0; // Reset ramp on overheat
+                    }
+                }
+            }
+        }
+        
+        // --- Sync virtual thrusters with parent ---
+        // Virtual thrusters disable when parent disables (block break)
+        if (thruster.isVirtual && thruster.parentThruster) {
+            if (thruster.parentThruster.disabled) {
+                thruster.disabled = true;
+            }
+        }
+        
+        // Reset firedThisFrame for next frame
+        thruster.firedThisFrame = false;
+    }
 }
 
 /**
@@ -135,8 +242,8 @@ function getThrustersForDirection(ship, moveDir) {
     const result = [];
     
     for (const thruster of ship.thrusters) {
-        // Skip disabled thrusters (on broken blocks)
-        if (thruster.disabled) continue;
+        // Skip disabled or overheated thrusters
+        if (isThrusterInactive(thruster)) continue;
         
         // Get thruster's exhaust direction in world space
         const exhaustWorldDir = rotateVector(thruster.exhaustDir, shipAngle);
@@ -170,8 +277,8 @@ function getThrustersForRotation(ship, rotationDirection) {
     const result = [];
     
     for (const thruster of ship.thrusters) {
-        // Skip disabled thrusters (on broken blocks)
-        if (thruster.disabled) continue;
+        // Skip disabled or overheated thrusters
+        if (isThrusterInactive(thruster)) continue;
         
         // Calculate torque this thruster would create
         // Torque = r × F = r.x * F.y - r.y * F.x
@@ -350,5 +457,6 @@ export {
     getThrustersForDirection,
     getThrustersForRotation,
     applyRotationThrusters,
-    getWorldPositionFromLocal
+    getWorldPositionFromLocal,
+    updateThrusterState
 };

@@ -3,15 +3,16 @@
 import { createScene, resizeScene, getRenderer, getScene, getCamera, screenToWorld } from './scene.js';
 import { createPhysicsWorld, stepPhysics } from './physics.js';
 import { createGrid, getGridGroup } from './grid.js';
-import { createBin, syncBinPiecesToPhysics, getBinGroup } from './bin.js';
+import { createBin, syncBinPiecesToPhysics, getBinGroup, getRandomBinPosition } from './bin.js';
 import { setupInput } from './input.js';
-import { spawnInitialParts, removePiece } from './pieces/piece.js';
+import { spawnInitialParts, removePiece, createPiece } from './pieces/piece.js';
 import { initDebug, updateDebug } from './debug.js';
 import { enterArena, enterArenaWithOpponent, enterArenaWithController, exitArena, updateArena, isArenaActive, resizeArena, setOutcomeCallbacks, switchToAiControl } from './arena/arena.js';
 import { createRandomController } from './arena/controllers.js';
 import { initStatsPanel, hideStats } from './statsPanel.js';
 import { setShipLayout, getShipLayout, clearGridPieces, createPiecesFromLayout } from './layout.js';
-import { generateName, setPlayerName, getPlayerName, setShipName, getShipName, needsPlayerName } from './naming.js';
+import { generateName, setPlayerName, getPlayerName, setShipName } from './naming.js';
+import { hasValidRun, getCurrentRun, startNewRun, getRunShipName, getRunMoney, addMoney, saveInventory, getRunInventory } from './run.js';
 import { saveShip, listSavedShips, loadSavedShip, deleteSavedShip } from './shipPersistence.js';
 import {
     importModelFromJson, exportModelAsJson, saveModelWeights, loadModelWeights, getModelStats,
@@ -21,6 +22,7 @@ import { startRecording, stopRecording, isRecording, getCompletedRuns, clearRuns
 import { initFirebase, isOnline, uploadFighter, fetchFighters, fetchFighter, fetchFighterForStage } from './firebase.js';
 import { getCurrentStage, advanceStage, retreatStage } from './stages.js';
 import { showTrainingSpinner, updateTrainingProgress, showVictory, showDefeat, hideFightOutcome } from './fightOutcome.js';
+import { initShop, showShop, hideShop, rollShop } from './shop.js';
 
 // Game state
 const gameState = {
@@ -52,7 +54,7 @@ function hideLandingScreen() {
  * Reveals all game UI elements that were hidden during loading.
  */
 function showGameUI() {
-    const ids = ['game-canvas', 'toolbar', 'dev-toolbar', 'tips-panel', 'copy-layout-icon'];
+    const ids = ['game-canvas', 'toolbar', 'dev-toolbar', 'tips-panel', 'copy-layout-icon', 'shop-panel'];
     for (const id of ids) {
         const el = document.getElementById(id);
         if (el) el.style.display = '';
@@ -79,8 +81,20 @@ const ANGLE_DOWN = Math.PI;
 const ANGLE_RIGHT = Math.PI * 3 / 2;
 
 const SHIP_PRESETS = {
-    // Balanced starter ship
+    // Small scrappy starter (player default - all starter-tier parts)
     starter: [
+        { type: "core", col: 4, row: 4, angle: 0 },
+        { type: "block_scrap_2x1", col: 4, row: 5, angle: ANGLE_RIGHT },
+        { type: "block_scrap_1x1", col: 3, row: 4, angle: 0 },
+        { type: "block_scrap_1x1", col: 5, row: 4, angle: 0 },
+        // Popgun at front - fire forward (mounted on scrap slab)
+        { type: "cannon_popgun", col: 4, row: 5, angle: ANGLE_UP },
+        // Rustbucket thrusters at back
+        { type: "thruster_rustbucket", col: 3, row: 4, angle: ANGLE_DOWN },
+        { type: "thruster_rustbucket", col: 5, row: 4, angle: ANGLE_DOWN }
+    ],
+    // Balanced ship with rare Axiom thrusters (NPC preset)
+    balanced: [
         { type: "block_2x2", col: 4, row: 5, angle: 0 },
         { type: "block_2x1", col: 3, row: 5, angle: ANGLE_RIGHT },
         { type: "core", col: 4, row: 4, angle: 0 },
@@ -88,17 +102,17 @@ const SHIP_PRESETS = {
         { type: "block_1x1", col: 5, row: 4, angle: 0 },
         { type: "block_1x1", col: 3, row: 4, angle: ANGLE_RIGHT },
         { type: "block_1x1", col: 3, row: 3, angle: 0 },
-        // Main thrusters at back - exhaust down to push forward
-        { type: "thruster", col: 3, row: 3, angle: ANGLE_DOWN },
-        { type: "thruster", col: 5, row: 3, angle: ANGLE_DOWN },
-        // Side thrusters for strafing
-        { type: "thruster", col: 5, row: 5, angle: ANGLE_RIGHT },
-        { type: "thruster", col: 3, row: 5, angle: ANGLE_LEFT },
+        // Main thrusters at back - Axiom PD-7 (rare)
+        { type: "thruster_axiom_pd7", col: 3, row: 3, angle: ANGLE_DOWN },
+        { type: "thruster_axiom_pd7", col: 5, row: 3, angle: ANGLE_DOWN },
+        // Side thrusters for strafing - Axiom PD-7 (rare)
+        { type: "thruster_axiom_pd7", col: 5, row: 5, angle: ANGLE_RIGHT },
+        { type: "thruster_axiom_pd7", col: 3, row: 5, angle: ANGLE_LEFT },
         // Cannons at front - fire forward
         { type: "cannon", col: 3, row: 6, angle: ANGLE_UP },
         { type: "cannon", col: 5, row: 6, angle: ANGLE_UP }
     ],
-    // Combat-focused ship with triple cannons
+    // Combat-focused ship with triple cannons (uses Torrent Retrojets for reverse)
     gunboat: [
         { type: "core", col: 4, row: 4, angle: 0 },
         { type: "block_2x1", col: 3, row: 3, angle: ANGLE_RIGHT },
@@ -110,26 +124,23 @@ const SHIP_PRESETS = {
         { type: "cannon", col: 3, row: 5, angle: ANGLE_UP },
         { type: "cannon", col: 4, row: 5, angle: ANGLE_UP },
         { type: "cannon", col: 5, row: 5, angle: ANGLE_UP },
-        // Main thrusters - exhaust down to push forward
-        { type: "thruster", col: 3, row: 4, angle: ANGLE_DOWN },
-        { type: "thruster", col: 5, row: 4, angle: ANGLE_DOWN },
-        // Rear thrusters - exhaust up to brake/reverse
-        { type: "thruster", col: 3, row: 3, angle: ANGLE_UP },
-        { type: "thruster", col: 5, row: 3, angle: ANGLE_UP }
+        // Main thrusters - Torrent Retrojet (uncommon, has back thrust built-in)
+        { type: "thruster_torrent", col: 3, row: 4, angle: ANGLE_DOWN },
+        { type: "thruster_torrent", col: 5, row: 4, angle: ANGLE_DOWN }
     ],
-    // Fast, lightweight ship
+    // Fast, lightweight ship (uses Inferno 470 for burst speed)
     speeder: [
         { type: "core", col: 4, row: 4, angle: 0 },
         { type: "block_1x1", col: 3, row: 4, angle: 0 },
         { type: "block_1x1", col: 5, row: 4, angle: 0 },
         { type: "block_1x1", col: 4, row: 5, angle: 0 },
-        // Main thrusters - exhaust down to push forward
-        { type: "thruster", col: 3, row: 4, angle: ANGLE_DOWN },
-        { type: "thruster", col: 5, row: 4, angle: ANGLE_DOWN },
+        // Main thrusters - Inferno 470 (common, high burst but overheats)
+        { type: "thruster_inferno", col: 3, row: 4, angle: ANGLE_DOWN },
+        { type: "thruster_inferno", col: 5, row: 4, angle: ANGLE_DOWN },
         // Cannon at front - fire forward
         { type: "cannon", col: 4, row: 5, angle: ANGLE_UP }
     ],
-    // Heavy, armored ship
+    // Heavy, armored ship (uses mix of cheap and industrial thrusters)
     tank: [
         { type: "core", col: 4, row: 4, angle: 0 },
         { type: "block_2x2", col: 3, row: 2, angle: 0 },
@@ -141,17 +152,17 @@ const SHIP_PRESETS = {
         // Cannons at front - fire forward
         { type: "cannon", col: 4, row: 6, angle: ANGLE_UP },
         { type: "cannon", col: 5, row: 6, angle: ANGLE_UP },
-        // Side thrusters for strafing
-        { type: "thruster", col: 3, row: 3, angle: ANGLE_LEFT },
-        { type: "thruster", col: 3, row: 5, angle: ANGLE_LEFT },
-        { type: "thruster", col: 6, row: 3, angle: ANGLE_RIGHT },
-        { type: "thruster", col: 6, row: 5, angle: ANGLE_RIGHT },
-        // Main thrusters at back - exhaust down to push forward
-        { type: "thruster", col: 4, row: 3, angle: ANGLE_DOWN },
-        { type: "thruster", col: 5, row: 3, angle: ANGLE_DOWN },
-        // Front thrusters - exhaust up to brake
-        { type: "thruster", col: 4, row: 2, angle: ANGLE_UP },
-        { type: "thruster", col: 5, row: 2, angle: ANGLE_UP }
+        // Side thrusters for strafing - Rustbucket (starter, cheap but heavy)
+        { type: "thruster_rustbucket", col: 3, row: 3, angle: ANGLE_LEFT },
+        { type: "thruster_rustbucket", col: 3, row: 5, angle: ANGLE_LEFT },
+        { type: "thruster_rustbucket", col: 6, row: 3, angle: ANGLE_RIGHT },
+        { type: "thruster_rustbucket", col: 6, row: 5, angle: ANGLE_RIGHT },
+        // Main thrusters at back - Volkov KR-7 (uncommon, powerful industrial)
+        { type: "thruster_volkov", col: 4, row: 3, angle: ANGLE_DOWN },
+        { type: "thruster_volkov", col: 5, row: 3, angle: ANGLE_DOWN },
+        // Front thrusters - Ignis Slow-Burn (starter, for braking)
+        { type: "thruster_ignis", col: 4, row: 2, angle: ANGLE_UP },
+        { type: "thruster_ignis", col: 5, row: 2, angle: ANGLE_UP }
     ]
 };
 
@@ -172,8 +183,10 @@ function spawnDefaultShip(gameState) {
 
 /**
  * Shows the callsign screen (after loading is complete) and waits for Start.
- * Hides the loading bar, reveals the name/ship form.
- * @returns {Promise<void>} Resolves when the player clicks Start
+ * Detects whether a valid run exists and shows the appropriate UI:
+ *   - Valid run: ship name, stage, money, Continue + New Run buttons
+ *   - No valid run: new ship name with reroll, Start New Run button
+ * @returns {Promise<void>} Resolves when the player clicks a start/continue button
  */
 function showLandingScreen() {
     return new Promise(resolve => {
@@ -184,13 +197,23 @@ function showLandingScreen() {
         if (contentEl) contentEl.classList.add('active');
 
         const playerNameInput = document.getElementById('landing-player-name');
-        const shipNameEl = document.getElementById('landing-ship-name');
-        const rerollBtn = document.getElementById('landing-reroll-btn');
-        const startBtn = document.getElementById('landing-start-btn');
         const statusDot = document.querySelector('#landing-status .status-dot');
         const statusText = document.getElementById('landing-status-text');
 
-        if (!playerNameInput || !shipNameEl || !startBtn) {
+        // Run-aware UI elements
+        const runInfoEl = document.getElementById('landing-run-info');
+        const runShipEl = document.getElementById('landing-run-ship');
+        const runStageEl = document.getElementById('landing-run-stage');
+        const runMoneyEl = document.getElementById('landing-run-money');
+        const newShipEl = document.getElementById('landing-new-ship');
+        const shipNameEl = document.getElementById('landing-ship-name');
+        const rerollBtn = document.getElementById('landing-reroll-btn');
+        const continueBtns = document.getElementById('landing-continue-btns');
+        const continueBtn = document.getElementById('landing-continue-btn');
+        const newRunBtn = document.getElementById('landing-newrun-btn');
+        const startBtn = document.getElementById('landing-start-btn');
+
+        if (!playerNameInput) {
             resolve();
             return;
         }
@@ -198,17 +221,7 @@ function showLandingScreen() {
         // Player name: load existing or leave empty for first visit
         playerNameInput.value = getPlayerName() || '';
 
-        // Ship name: load existing or generate new
-        let currentShip = getShipName() || generateName();
-        shipNameEl.textContent = currentShip;
-
-        // Reroll generates a new ship name
-        rerollBtn.addEventListener('click', () => {
-            currentShip = generateName();
-            shipNameEl.textContent = currentShip;
-        });
-
-        // Firebase was already initialized during loading
+        // Connection status
         if (isOnline()) {
             statusDot.className = 'status-dot online';
             statusText.textContent = 'Online - fighters will sync';
@@ -217,26 +230,84 @@ function showLandingScreen() {
             statusText.textContent = 'Offline - play locally';
         }
 
-        startBtn.textContent = isOnline() ? 'Start' : 'Start Offline';
+        // Generate a ship name for potential new run
+        let pendingShipName = generateName();
 
-        // Focus the name input
-        playerNameInput.focus();
-
-        // Start button: validate, save names, go straight to designer
-        startBtn.addEventListener('click', () => {
+        // Helper: validate player name and save it
+        function validateAndSavePlayerName() {
             const playerName = playerNameInput.value.trim();
             if (!playerName) {
                 playerNameInput.focus();
                 playerNameInput.style.borderColor = '#e53e3e';
-                return;
+                return false;
+            }
+            setPlayerName(playerName);
+            return true;
+        }
+
+        // Helper: switch UI to "new run" mode (used by New Run button)
+        function showNewRunUI() {
+            if (runInfoEl) runInfoEl.classList.remove('active');
+            if (continueBtns) continueBtns.style.display = 'none';
+
+            if (newShipEl) newShipEl.style.display = '';
+            if (shipNameEl) shipNameEl.textContent = pendingShipName;
+            if (startBtn) startBtn.style.display = '';
+        }
+
+        // Determine which UI to show based on run state
+        if (hasValidRun()) {
+            // -- Existing valid run: show run info + Continue / New Run --
+            const run = getCurrentRun();
+            if (runInfoEl) runInfoEl.classList.add('active');
+            if (runShipEl) runShipEl.textContent = run.shipName;
+            if (runStageEl) runStageEl.textContent = `Stage ${run.stage}`;
+            if (runMoneyEl) runMoneyEl.textContent = `${run.money} credits`;
+            if (continueBtns) continueBtns.style.display = '';
+            if (newShipEl) newShipEl.style.display = 'none';
+            if (startBtn) startBtn.style.display = 'none';
+
+            // Continue button: keep existing run, enter designer
+            if (continueBtn) {
+                continueBtn.addEventListener('click', () => {
+                    if (!validateAndSavePlayerName()) return;
+                    currentShipName = run.shipName;
+                    resolve();
+                });
             }
 
-            setPlayerName(playerName);
-            setShipName(currentShip);
-            currentShipName = currentShip;
+            // New Run button: switch to new-ship-name UI
+            if (newRunBtn) {
+                newRunBtn.addEventListener('click', () => {
+                    showNewRunUI();
+                });
+            }
+        } else {
+            // -- No valid run: show ship name generation + Start New Run --
+            showNewRunUI();
+        }
 
-            resolve();
-        });
+        // Reroll generates a new ship name
+        if (rerollBtn) {
+            rerollBtn.addEventListener('click', () => {
+                pendingShipName = generateName();
+                if (shipNameEl) shipNameEl.textContent = pendingShipName;
+            });
+        }
+
+        // Start New Run button: create run with the displayed ship name
+        if (startBtn) {
+            startBtn.addEventListener('click', () => {
+                if (!validateAndSavePlayerName()) return;
+                startNewRun(pendingShipName);
+                setShipName(pendingShipName);
+                currentShipName = pendingShipName;
+                resolve();
+            });
+        }
+
+        // Focus the name input
+        playerNameInput.focus();
 
         // Clear red border on input when typing
         playerNameInput.addEventListener('input', () => {
@@ -313,15 +384,54 @@ async function init() {
         setupMyShipsDropdown();
         setupTipsDismiss();
         updateStageIndicator();
+
+        // Initialise shop (always-visible panel on the right)
+        initShop(gameState, { onMoneyChanged: updateMoneyDisplay });
     });
     
     // Loading complete — show callsign screen and wait for Start
     updateLoading(100, 'Ready!');
     await showLandingScreen();
-    
+
+    // ---- Restore or save inventory ----
+    // If continuing a run that has saved inventory, replace the default ship
+    // with the saved pieces. Otherwise (new run / legacy run), persist the
+    // current default ship so future reloads are consistent.
+    const savedInventory = getRunInventory();
+    if (savedInventory) {
+        // Clear any bin pieces spawned during loading
+        for (const piece of [...gameState.binPieces]) {
+            const idx = gameState.pieces.indexOf(piece);
+            if (idx !== -1) gameState.pieces.splice(idx, 1);
+            removePiece(piece);
+        }
+        gameState.binPieces.length = 0;
+
+        // Restore grid layout (setShipLayout clears existing grid pieces first)
+        setShipLayout(savedInventory.gridLayout, gameState);
+
+        // Restore bin pieces
+        for (const type of savedInventory.binPieces) {
+            const pos = getRandomBinPosition();
+            const piece = createPiece(type, pos.x, pos.y);
+            if (piece) {
+                gameState.pieces.push(piece);
+                gameState.binPieces.push(piece);
+            }
+        }
+    } else {
+        // New run or legacy run without inventory — save current state
+        saveInventory(
+            getShipLayout(),
+            gameState.binPieces.map(p => p.type)
+        );
+    }
+
     // Start clicked — instantly reveal game UI and begin
     showGameUI();
     hideLandingScreen();
+    updateStageIndicator();
+    updateMoneyDisplay();
     refreshAiStatusIndicator();
     requestAnimationFrame(gameLoop);
 }
@@ -785,6 +895,15 @@ function updateStageIndicator() {
     }
 }
 
+/**
+ * Updates the money display in the toolbar.
+ */
+function updateMoneyDisplay() {
+    const el = document.getElementById('money-display');
+    if (!el) return;
+    el.textContent = `${getRunMoney()} cr`;
+}
+
 // ============================================================================
 // Save Ship UI
 // ============================================================================
@@ -1187,7 +1306,7 @@ async function uploadFighterForStage(stageNum, trained) {
     const layout = getShipLayout();
     if (layout.length === 0) return;
 
-    const shipName = currentShipName || getShipName() || 'unnamed';
+    const shipName = currentShipName || getRunShipName() || 'unnamed';
 
     let weightData = null;
     if (trained) {
@@ -1582,8 +1701,11 @@ async function handleStageFightEnd(outcome) {
             await uploadFighterForStage(stage, trained);
             trained.model.dispose();
         }
+        addMoney(10); // Stage win reward
         advanceStage();
         updateStageIndicator();
+        updateMoneyDisplay();
+        rollShop(); // Free shop reroll on stage win
 
         showVictory(stage, {
             onNextStage: () => {
@@ -1702,17 +1824,26 @@ function showDesignMode(visible) {
     
     // Hide/show design-only toolbar elements
     const stageIndicator = document.getElementById('stage-indicator');
+    const moneyDisplay = document.getElementById('money-display');
     const saveBtn = document.getElementById('save-ship-btn');
     const myShips = document.getElementById('my-ships-selector');
     const devToolbar = document.getElementById('dev-toolbar');
     const copyIcon = document.getElementById('copy-layout-icon');
     if (stageIndicator) stageIndicator.style.display = visible ? '' : 'none';
+    if (moneyDisplay) moneyDisplay.style.display = visible ? '' : 'none';
     if (saveBtn) saveBtn.style.display = visible ? '' : 'none';
     if (myShips) myShips.style.display = visible ? '' : 'none';
     if (devToolbar) devToolbar.style.display = visible ? '' : 'none';
     if (copyIcon) copyIcon.style.display = visible ? '' : 'none';
     const aiStatus = document.getElementById('ai-status-indicator');
     if (aiStatus) aiStatus.style.display = visible ? '' : 'none';
+
+    // Show/hide the shop panel
+    if (visible) {
+        showShop();
+    } else {
+        hideShop();
+    }
 }
 
 let lastTime = 0;
