@@ -7,7 +7,7 @@ import { createBin, syncBinPiecesToPhysics, getBinGroup, getRandomBinPosition } 
 import { setupInput } from './input.js';
 import { spawnInitialParts, removePiece, createPiece } from './pieces/piece.js';
 import { initDebug, updateDebug } from './debug.js';
-import { enterArena, enterArenaWithOpponent, enterArenaWithController, exitArena, updateArena, isArenaActive, resizeArena, setOutcomeCallbacks, switchToAiControl } from './arena/arena.js';
+import { enterArena, enterArenaWithOpponent, enterArenaWithController, exitArena, pauseArena, updateArena, isArenaActive, resizeArena, setOutcomeCallbacks, switchToAiControl } from './arena/arena.js';
 import { createRandomController } from './arena/controllers.js';
 import { initStatsPanel, hideStats } from './statsPanel.js';
 import { setShipLayout, getShipLayout, clearGridPieces, createPiecesFromLayout } from './layout.js';
@@ -19,7 +19,7 @@ import {
     createModel, getDefaultConfig, prepareTrainingData, trainModel, disposeTrainingData
 } from './ml/model.js';
 import { startRecording, stopRecording, isRecording, getCompletedRuns, clearRuns } from './ml/recording.js';
-import { initFirebase, isOnline, uploadFighter, fetchFighters, fetchFighter, fetchFighterForStage } from './firebase.js';
+import { initFirebase, isOnline, uploadFighter, fetchFighters, fetchFighter, fetchFighterForStage, fetchFighterCountsByStage } from './firebase.js';
 import { getCurrentStage, advanceStage, retreatStage } from './stages.js';
 import { showTrainingSpinner, updateTrainingProgress, showVictory, showDefeat, hideFightOutcome } from './fightOutcome.js';
 import { initShop, showShop, hideShop, rollShop } from './shop.js';
@@ -228,6 +228,40 @@ function showLandingScreen() {
         } else {
             statusDot.className = 'status-dot offline';
             statusText.textContent = 'Offline - play locally';
+        }
+
+        // Stage opponent counts (non-blocking)
+        const stageCountsEl = document.getElementById('landing-stage-counts');
+        const stageCountsBody = document.getElementById('stage-counts-body');
+        const stageCountsLoading = document.getElementById('stage-counts-loading');
+        if (isOnline() && stageCountsEl && stageCountsBody) {
+            stageCountsEl.classList.add('active');
+            if (stageCountsLoading) stageCountsLoading.textContent = 'Loading...';
+
+            fetchFighterCountsByStage().then(counts => {
+                if (stageCountsLoading) stageCountsLoading.textContent = '';
+                stageCountsBody.innerHTML = '';
+                const stages = Object.keys(counts).map(Number).sort((a, b) => a - b);
+                if (stages.length === 0) {
+                    if (stageCountsLoading) stageCountsLoading.textContent = 'No fighters yet';
+                    return;
+                }
+                for (const stage of stages) {
+                    const { total, compatible } = counts[stage];
+                    const outdated = total - compatible;
+                    const row = document.createElement('tr');
+
+                    // Color code compatible: good (2+), low (1), none (0)
+                    const compatClass = compatible >= 2 ? 'good' : compatible === 1 ? 'low' : 'none';
+
+                    row.innerHTML =
+                        `<td>Stage ${stage}</td>` +
+                        `<td class="col-compatible ${compatClass}">${compatible}</td>` +
+                        `<td class="col-outdated">${outdated}</td>` +
+                        `<td class="col-total">${total}</td>`;
+                    stageCountsBody.appendChild(row);
+                }
+            });
         }
 
         // Generate a ship name for potential new run
@@ -826,6 +860,8 @@ async function handleCustomFightEnd(outcome, pilot) {
     if (isRecording()) stopRecording();
 
     if (pilot === 'manual') {
+        // Freeze the arena so it stops simulating during training
+        pauseArena();
         // Auto-train from recorded data
         showTrainingSpinner();
         const trained = await autoTrainFromRecording();
@@ -1679,6 +1715,9 @@ async function handleStageFightEnd(outcome) {
 
     // Stop recording player actions
     if (isRecording()) stopRecording();
+
+    // Freeze the arena so it stops simulating during training
+    pauseArena();
 
     // Show training spinner
     showTrainingSpinner();

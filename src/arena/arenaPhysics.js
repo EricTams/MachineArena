@@ -145,7 +145,7 @@ function applyForceAtPosition(body, worldPos, force) {
 function applyTorque(body, torque) {
     // Convert world convention (positive = CCW) to Matter.js convention (positive = CW)
     const physicsTorque = -torque;
-    const angularAccel = physicsTorque / body.mass;
+    const angularAccel = physicsTorque / body.inertia;
     Body.setAngularVelocity(body, body.angularVelocity + angularAccel * 0.016);
 }
 

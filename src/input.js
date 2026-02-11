@@ -57,6 +57,9 @@ function onMouseDown(event) {
         gameStateRef.selectedPiece = piece;
         gameStateRef.dragging = true;
         pickUpPiece(piece, worldPos.x, worldPos.y, gameStateRef);
+        // Allow mouse events to pass through the shop panel to the canvas
+        const shopPanel = document.getElementById('shop-panel');
+        if (shopPanel) shopPanel.style.pointerEvents = 'none';
     }
 }
 
@@ -85,8 +88,6 @@ function onDocMouseMoveDuringShopDrag(event) {
     if (!gameStateRef.dragging || !gameStateRef.selectedPiece) return;
     const worldPos = screenToWorld(event.clientX, event.clientY);
     updateDraggingPiece(gameStateRef.selectedPiece, worldPos.x, worldPos.y);
-    // Update sell zone hover highlight
-    setSellZoneHover(isInsideSellZone(event.clientX, event.clientY));
 }
 
 /** Global mouseup handler while dragging a shop-bought piece */
@@ -99,14 +100,8 @@ function onDocMouseUpDuringShopDrag(event) {
     const piece = gameStateRef.selectedPiece;
     const worldPos = screenToWorld(event.clientX, event.clientY);
 
-    // Check sell zone
-    if (isInsideSellZone(event.clientX, event.clientY)) {
-        setSellZoneHover(false);
-        handleSellPiece(piece, gameStateRef);
-    } else {
-        setSellZoneHover(false);
-        dropPiece(piece, worldPos.x, worldPos.y, gameStateRef);
-    }
+    // Always place — never sell a piece that was just bought from the shop
+    dropPiece(piece, worldPos.x, worldPos.y, gameStateRef);
 
     gameStateRef.selectedPiece = null;
     gameStateRef.dragging = false;
@@ -178,6 +173,9 @@ function onMouseUp(event) {
     
     gameStateRef.selectedPiece = null;
     gameStateRef.dragging = false;
+    // Restore shop panel pointer events
+    const shopPanel = document.getElementById('shop-panel');
+    if (shopPanel) shopPanel.style.pointerEvents = '';
 }
 
 /**

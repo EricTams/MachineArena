@@ -17,10 +17,10 @@ const UNCOMMON_THRUSTER_DEFINITIONS = {
         height: 1,
         mass: 0.45,
         color: 0x3366AA,    // Navy blue
-        thrustForce: 0.7,
+        thrustForce: 1.4,
         // Back thrust -- secondary retro-nozzle fires in reverse direction
         backThrust: {
-            force: 0.7,
+            force: 1.4,
             angleOffset: Math.PI  // 180 degrees from main exhaust
         },
         description: 'A solid thruster with a built-in retro-nozzle. Not as refined as Axiom\'s offerings, but pilots who need braking on a budget swear by it.'
@@ -34,7 +34,7 @@ const UNCOMMON_THRUSTER_DEFINITIONS = {
         height: 1,
         mass: 0.5,
         color: 0x667744,    // Industrial grey-green
-        thrustForce: 0.95,
+        thrustForce: 1.9,
         // Short ramp up
         rampUp: {
             startPercent: 0.4,   // Starts at 40% thrust

@@ -9,6 +9,7 @@
 /* global firebase */
 
 import { getPlayerName, sanitizeForDocId } from './naming.js';
+import { SCHEMA_VERSION } from './ml/schema.js';
 
 const COLLECTION = 'fighters';
 
@@ -177,11 +178,53 @@ async function fetchFighterForStage(stageNum) {
     }
 }
 
+// ============================================================================
+// Stage counts (landing screen)
+// ============================================================================
+
+/**
+ * Fetches per-stage fighter counts from Firestore.
+ * Returns a map of stageNum -> { total, compatible } where compatible means
+ * the fighter's schemaVersion matches the current SCHEMA_VERSION.
+ *
+ * AIDEV-NOTE: This pulls all documents because the Firestore client SDK
+ * doesn't support field projection. Acceptable at current scale; replace
+ * with a Cloud Function or stats doc if the collection grows large.
+ *
+ * @returns {Promise<Object>} e.g. { 1: { total: 12, compatible: 8 }, 2: { total: 5, compatible: 3 } }
+ */
+async function fetchFighterCountsByStage() {
+    if (!isOnline()) return {};
+
+    try {
+        const snapshot = await db.collection(COLLECTION).get();
+        const counts = {};
+
+        snapshot.docs.forEach(doc => {
+            const d = doc.data();
+            const stage = d.levelNum ?? 0;
+            if (!counts[stage]) {
+                counts[stage] = { total: 0, compatible: 0 };
+            }
+            counts[stage].total++;
+            if (d.schemaVersion === SCHEMA_VERSION) {
+                counts[stage].compatible++;
+            }
+        });
+
+        return counts;
+    } catch (err) {
+        console.warn('Failed to fetch fighter counts:', err.message);
+        return {};
+    }
+}
+
 export {
     initFirebase,
     isOnline,
     uploadFighter,
     fetchFighters,
     fetchFighter,
-    fetchFighterForStage
+    fetchFighterForStage,
+    fetchFighterCountsByStage
 };

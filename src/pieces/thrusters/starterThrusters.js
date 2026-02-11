@@ -17,7 +17,7 @@ const STARTER_THRUSTER_DEFINITIONS = {
         height: 1,
         mass: 0.7,          // Large Size -- heavy and bulky
         color: 0x8B6914,    // Rusty brown-gold
-        thrustForce: 0.35,
+        thrustForce: 0.7,
         // No special behaviors, just weak and heavy
         description: 'Salvaged junkyard thruster. Cheap, heavy, underpowered. Gets the job done... barely.'
     },
@@ -30,7 +30,7 @@ const STARTER_THRUSTER_DEFINITIONS = {
         height: 1,
         mass: 0.35,
         color: 0xCC7722,    // Warm orange
-        thrustForce: 0.7,   // At full ramp
+        thrustForce: 1.4,   // At full ramp
         // Ramp up behavior
         rampUp: {
             startPercent: 0.2,   // Starts at 20% thrust

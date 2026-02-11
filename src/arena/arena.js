@@ -39,7 +39,8 @@ const arenaState = {
     sensingState: null,  // Current sensing state for player ship
     onFightWon: null,    // Callback when player wins (all enemies destroyed)
     onFightLost: null,   // Callback when player loses (player core destroyed)
-    outcomeResolved: false  // Prevents double-firing outcome callbacks
+    outcomeResolved: false, // Prevents double-firing outcome callbacks
+    paused: false           // When true, updateArena() skips simulation (freeze in place)
 };
 
 // Store original camera settings to restore on exit
@@ -394,6 +395,7 @@ function exitArena() {
     arenaState.onFightWon = null;
     arenaState.onFightLost = null;
     arenaState.outcomeResolved = false;
+    arenaState.paused = false;
     
     // Restore design mode debug visibility
     setDebugVisible(true);
@@ -402,11 +404,19 @@ function exitArena() {
 }
 
 /**
+ * Pauses the arena simulation so no further updates run.
+ * The scene stays rendered (frozen) but physics/AI/weapons stop.
+ */
+function pauseArena() {
+    arenaState.paused = true;
+}
+
+/**
  * Updates arena simulation (called from game loop)
  * @param {number} deltaTime - Time since last frame in seconds
  */
 function updateArena(deltaTime) {
-    if (!arenaState.active || arenaState.ships.length === 0) return;
+    if (!arenaState.active || arenaState.paused || arenaState.ships.length === 0) return;
     
     let allActiveThrusts = [];
     let playerInput = null;
@@ -940,6 +950,7 @@ export {
     enterArenaWithOpponent,
     enterArenaWithController,
     exitArena,
+    pauseArena,
     updateArena,
     isArenaActive,
     getArenaState,

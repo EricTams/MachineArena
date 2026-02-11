@@ -17,7 +17,7 @@ const RARE_THRUSTER_DEFINITIONS = {
         height: 1,
         mass: 0.3,
         color: 0x44cccc,    // Original thruster color -- Axiom cyan
-        thrustForce: 1.0,
+        thrustForce: 2.0,
         // No drawbacks -- the gold standard
         description: 'Axiom\'s flagship. Industry-leading thrust-to-weight ratio, zero compromises. Overpriced, overengineered, and worth every credit.'
     }

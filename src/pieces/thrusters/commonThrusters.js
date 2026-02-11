@@ -17,7 +17,7 @@ const COMMON_THRUSTER_DEFINITIONS = {
         height: 1,
         mass: 0.4,
         color: 0xDD3311,    // Hot red
-        thrustForce: 0.9,
+        thrustForce: 1.8,
         // Overheat behavior
         overheat: {
             threshold: 0.6,      // Overheats if used more than 60% of the last 10 seconds
@@ -35,10 +35,10 @@ const COMMON_THRUSTER_DEFINITIONS = {
         height: 1,
         mass: 0.5,
         color: 0x44AA88,    // Teal-green
-        thrustForce: 0.5,
+        thrustForce: 1.0,
         // Side thrust -- secondary nozzle fires perpendicular (90 CW from main)
         sideThrust: {
-            force: 0.5,
+            force: 1.0,
             angleOffset: -Math.PI / 2  // 90 degrees clockwise from main exhaust
         },
         description: 'Dual-nozzle thruster with an independent lateral jet. Gives strafing from a single mount point.'

@@ -355,6 +355,61 @@
         .status-dot.online { background: #48bb78; }
         .status-dot.offline { background: #a0aec0; }
         .status-dot.connecting { background: #ecc94b; }
+        /* Stage opponent counts table */
+        #landing-stage-counts {
+            display: none;
+            flex-direction: column;
+            align-items: center;
+            max-height: 280px;
+            overflow-y: auto;
+        }
+        #landing-stage-counts.active {
+            display: flex;
+        }
+        #stage-counts-label {
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 11px;
+            color: #718096;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            margin-bottom: 8px;
+        }
+        #stage-counts-table {
+            border-collapse: collapse;
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 12px;
+        }
+        #stage-counts-table th {
+            color: #718096;
+            font-weight: 400;
+            text-align: right;
+            padding: 2px 10px;
+            font-size: 11px;
+            border-bottom: 1px solid #2d3748;
+        }
+        #stage-counts-table th:first-child {
+            text-align: left;
+        }
+        #stage-counts-table td {
+            padding: 3px 10px;
+            text-align: right;
+        }
+        #stage-counts-table td:first-child {
+            text-align: left;
+            color: #a0aec0;
+            font-weight: 600;
+        }
+        #stage-counts-table .col-compatible { font-weight: 600; }
+        #stage-counts-table .col-compatible.good { color: #48bb78; }
+        #stage-counts-table .col-compatible.low { color: #ecc94b; }
+        #stage-counts-table .col-compatible.none { color: #e53e3e; }
+        #stage-counts-table .col-total { color: #718096; }
+        #stage-counts-table .col-outdated { color: #4a5568; }
+        #stage-counts-loading {
+            font-family: 'Segoe UI', sans-serif;
+            font-size: 12px;
+            color: #4a5568;
+        }
         /* Start / Continue / New Run buttons */
         .landing-btn {
             padding: 12px 36px;
@@ -431,14 +486,30 @@
         #landing-loading.active {
             display: flex;
         }
-        /* Callsign section (hidden until loading completes) */
+        /* Callsign section (hidden until loading completes) — two-column layout */
         #landing-content {
             display: none;
-            flex-direction: column;
-            align-items: center;
+            flex-direction: row;
+            align-items: flex-start;
+            justify-content: center;
+            gap: 48px;
         }
         #landing-content.active {
             display: flex;
+        }
+        /* Left column: callsign, run info, buttons */
+        #landing-left {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-width: 280px;
+        }
+        /* Right column: stage opponent counts */
+        #landing-right {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            min-width: 240px;
         }
         .name-btn {
             padding: 10px 28px;
@@ -974,7 +1045,7 @@
     <div id="landing-screen">
         <div id="landing-title">Machine Arena</div>
         <div id="landing-subtitle">Design. Train. Fight.</div>
-        <div id="landing-version">v0.2 &mdash; Feb 9, 2026 9:12 AM</div>
+        <div id="landing-version">v0.2 &mdash; Feb 10, 2026 7:37 PM</div>
         
         <!-- Loading bar (shown first while systems initialize) -->
         <div id="landing-loading" class="active">
@@ -986,34 +1057,56 @@
         
         <!-- Callsign section (revealed after loading completes) -->
         <div id="landing-content">
-            <div id="landing-callsign-label">Pilot Name</div>
-            <input type="text" id="landing-player-name" placeholder="Enter your name..." maxlength="40" />
-            
-            <!-- Existing run info (shown when a valid run exists) -->
-            <div id="landing-run-info">
-                <div id="landing-run-ship"></div>
-                <div id="landing-run-stage"></div>
-                <div id="landing-run-money"></div>
+            <!-- Left column: pilot name, run info, buttons -->
+            <div id="landing-left">
+                <div id="landing-callsign-label">Pilot Name</div>
+                <input type="text" id="landing-player-name" placeholder="Enter your name..." maxlength="40" />
+                
+                <!-- Existing run info (shown when a valid run exists) -->
+                <div id="landing-run-info">
+                    <div id="landing-run-ship"></div>
+                    <div id="landing-run-stage"></div>
+                    <div id="landing-run-money"></div>
+                </div>
+
+                <!-- New ship name (shown when no valid run exists) -->
+                <div id="landing-new-ship" style="display:none">
+                    <div id="landing-ship-label">Ship Name</div>
+                    <div id="landing-ship-name"></div>
+                    <button id="landing-reroll-btn">Reroll</button>
+                </div>
+                
+                <div id="landing-status">
+                    <span class="status-dot connecting"></span>
+                    <span id="landing-status-text">Checking connection...</span>
+                </div>
+                
+                <!-- Buttons: Continue + New Run  OR  Start New Run -->
+                <div class="landing-btn-row" id="landing-continue-btns" style="display:none">
+                    <button class="landing-btn primary" id="landing-continue-btn">Continue</button>
+                    <button class="landing-btn secondary" id="landing-newrun-btn">New Run</button>
+                </div>
+                <button class="landing-btn primary" id="landing-start-btn" style="display:none">Start New Run</button>
             </div>
 
-            <!-- New ship name (shown when no valid run exists) -->
-            <div id="landing-new-ship" style="display:none">
-                <div id="landing-ship-label">Ship Name</div>
-                <div id="landing-ship-name"></div>
-                <button id="landing-reroll-btn">Reroll</button>
+            <!-- Right column: per-stage fighter counts -->
+            <div id="landing-right">
+                <div id="landing-stage-counts">
+                    <div id="stage-counts-label">Stage Opponents</div>
+                    <table id="stage-counts-table">
+                        <thead>
+                            <tr>
+                                <th>Stage</th>
+                                <th>Compatible</th>
+                                <th>Outdated</th>
+                                <th>Total</th>
+                            </tr>
+                        </thead>
+                        <tbody id="stage-counts-body"></tbody>
+                    </table>
+                    <span id="stage-counts-loading"></span>
+                </div>
             </div>
-            
-            <div id="landing-status">
-                <span class="status-dot connecting"></span>
-                <span id="landing-status-text">Checking connection...</span>
-            </div>
-            
-            <!-- Buttons: Continue + New Run  OR  Start New Run -->
-            <div class="landing-btn-row" id="landing-continue-btns" style="display:none">
-                <button class="landing-btn primary" id="landing-continue-btn">Continue</button>
-                <button class="landing-btn secondary" id="landing-newrun-btn">New Run</button>
-            </div>
-            <button class="landing-btn primary" id="landing-start-btn" style="display:none">Start New Run</button>
         </div>
     </div>
     
