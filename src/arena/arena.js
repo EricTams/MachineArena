@@ -15,8 +15,9 @@ import { initArenaControlsDisplay, updateArenaControlsDisplay, cleanupArenaContr
 import { computeSensingState } from './sensing.js';
 import { initSensingDebug, cleanupSensingDebug, updateSensingDebug } from './sensingDebug.js';
 import { isRecording, stopRecording, recordFrame } from '../ml/recording.js';
-import { initMlPanel, cleanupMlPanel } from '../ml/mlPanel.js';
+import { hasTracker, trackFrame } from '../ml/predictionTracker.js';
 import { createMlController } from '../ml/mlController.js';
+import { loadModelWeights } from '../ml/model.js';
 import { resolveArenaType } from './arenaTypes.js';
 import { initHazards, updateHazards, checkHazardCollisions, cleanupHazards, getHazardSensingData } from './hazards.js';
 
@@ -55,6 +56,9 @@ let currentArenaConfig = null;
 // AI control state
 let savedPlayerController = null;  // Original player controller (saved when switching to AI)
 let activeMlController = null;     // Active ML controller instance (null when player-controlled)
+
+// Previous frame's mouse position for ML sensing (so input reflects state before movement)
+let previousMousePos = null;
 
 /**
  * Enters arena mode with a specific level
@@ -180,9 +184,6 @@ function enterArenaLevel(levelId, playerGridPieces, scene, camera, renderer, scr
     // Initialize sensing debug visualization
     initSensingDebug(scene);
     
-    // Initialize ML panel
-    initMlPanel();
-    
     // Setup input handling (for player input events)
     setupArenaInput(arenaState, screenToWorld, renderer.domElement);
     
@@ -195,7 +196,7 @@ function enterArenaLevel(levelId, playerGridPieces, scene, camera, renderer, scr
     // Show arena name overlay
     showArenaNameOverlay(config.name);
     
-    console.log(`Arena mode active - ${config.name}. WASD to move, mouse to aim. G for debug, V for sensing, M for ML panel, T to exit.`);
+    console.log(`Arena mode active - ${config.name}. WASD to move, mouse to aim. G for debug, V for sensing, T to exit.`);
     
     return true;
 }
@@ -294,9 +295,6 @@ function enterArena(gridPieces, scene, camera, renderer, screenToWorld, arenaTyp
     // Initialize sensing debug visualization
     initSensingDebug(scene);
     
-    // Initialize ML panel
-    initMlPanel();
-    
     // Setup input handling
     setupArenaInput(arenaState, screenToWorld, renderer.domElement);
     
@@ -309,7 +307,7 @@ function enterArena(gridPieces, scene, camera, renderer, screenToWorld, arenaTyp
     // Show arena name overlay
     showArenaNameOverlay(config.name);
     
-    console.log(`Arena mode active - ${config.name}. WASD to move, mouse to aim. G for debug, V for sensing, M for ML panel, T to exit.`);
+    console.log(`Arena mode active - ${config.name}. WASD to move, mouse to aim. G for debug, V for sensing, T to exit.`);
     
     return true;
 }
@@ -330,8 +328,8 @@ function exitArena() {
     // Stop ML recording if active
     if (isRecording()) stopRecording();
     
-    // Hide ML panel
-    cleanupMlPanel();
+    // Reset previous mouse position tracking
+    previousMousePos = null;
     
     // Remove input handlers
     removeArenaInput();
@@ -502,6 +500,12 @@ function updateArena(deltaTime) {
     // Compute sensing state for player ship (for ML training data)
     if (arenaState.playerShip && !arenaState.playerShip.destroyed) {
         const projectiles = getProjectiles();
+        // aimPosition for mouse sensing: use previous frame's mouse position (player)
+        // or ML controller's last aim target (AI), so the NN input reflects the state
+        // BEFORE the movement that the output describes.
+        const aimPosition = activeMlController
+            ? activeMlController.getLastAimTarget()
+            : previousMousePos;
         // Pass mousePos as engagement target so sensing selects the enemy
         // the player is aiming at (for single engaged enemy slot)
         arenaState.sensingState = computeSensingState(
@@ -510,8 +514,11 @@ function updateArena(deltaTime) {
             arenaState.hazards,
             arenaState.blockers,
             projectiles,
-            mousePos
+            mousePos,
+            aimPosition
         );
+        // Track mouse position for next frame's sensing input
+        previousMousePos = mousePos ? { x: mousePos.x, y: mousePos.y } : null;
         
         // Update sensing debug visualization (pass ships for lead indicator)
         updateSensingDebug(arenaState.sensingState, arenaState.playerShip, mousePos, arenaState.ships);
@@ -524,6 +531,9 @@ function updateArena(deltaTime) {
         // Record frame for ML training (sense + action from this frame)
         if (isRecording() && playerInput) {
             recordFrame(arenaState.sensingState, playerInput, arenaState.playerShip, mousePos);
+            if (hasTracker()) {
+                trackFrame(arenaState.sensingState, playerInput, arenaState.playerShip, mousePos);
+            }
         }
     }
 
@@ -801,6 +811,28 @@ function isAiControlled() {
 }
 
 /**
+ * Toggles between player and AI control.
+ * Loads model from IndexedDB if no model is in memory.
+ */
+async function toggleAiControl() {
+    if (isAiControlled()) {
+        switchToPlayerControl();
+        console.log('Switched to player control');
+        return;
+    }
+
+    // Load model from IndexedDB
+    const result = await loadModelWeights();
+    if (!result) {
+        console.warn('No model found — train one first');
+        return;
+    }
+
+    const success = switchToAiControl(result.model);
+    console.log(success ? 'AI control enabled' : 'Failed to enable AI control');
+}
+
+/**
  * Enters arena with a specific opponent ship controlled by an ML model.
  * Used for "Fight Against" saved ships (offline opponent training).
  * @param {Array} playerPieces - Player's ship pieces
@@ -903,7 +935,6 @@ function enterArenaWithController(playerPieces, opponentPieces, opponentControll
     initWeaponSystem(scene);
     initArenaControlsDisplay();
     initSensingDebug(scene);
-    initMlPanel();
     setupArenaInput(arenaState, screenToWorld, renderer.domElement);
     setDebugVisible(false);
 
@@ -958,5 +989,6 @@ export {
     switchToAiControl,
     switchToPlayerControl,
     isAiControlled,
+    toggleAiControl,
     setOutcomeCallbacks
 };

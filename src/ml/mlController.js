@@ -3,16 +3,15 @@
 // Follows the same controller interface as PlayerController and RandomController:
 //   { type, getInput(ship, deltaTime), postUpdate() }
 //
-// The model receives flattened sensing (59 floats) and outputs action (13 floats).
-// Discrete outputs are thresholded at 0.5. Aim is reconstructed from:
-//   velocity/facing leads + ship-relative residual (single engaged enemy in slot 0).
+// The model receives flattened sensing (62 floats) and outputs action (12 floats).
+// Discrete outputs are thresholded at 0.5. Aim is predicted as an absolute
+// position in dot-product form relative to the ship (no accumulator, no drift).
 
 /* global tf */
 
 import { flattenSensingState, ARENA_DIAGONAL } from '../arena/sensing.js';
 import { getArenaPhysicsScale } from '../arena/arenaPhysics.js';
-import { rotateVector, length, normalize } from '../math.js';
-import { MAX_LEAD_DISTANCE, MIN_ENEMY_SPEED } from './schema.js';
+import { rotateVector } from '../math.js';
 
 const DISCRETE_THRESHOLD = 0.5;
 const AIM_HALF_RANGE = ARENA_DIAGONAL / 2;
@@ -45,7 +44,7 @@ function createMlController(model) {
             }
 
             const prediction = predict(model, sensingState);
-            const input = predictionToInput(prediction, ship, sensingState.enemyWorldData);
+            const input = predictionToInput(prediction, ship);
             lastAimTarget = input.aimTarget;
             return input;
         },
@@ -85,9 +84,9 @@ function predict(model, sensingState) {
 
 /**
  * Converts raw model prediction to a controller input object.
- * Reconstructs aim from single engaged enemy (slot 0) + leads + residual.
+ * Reconstructs world-space aim directly from predicted dot products + distance.
  */
-function predictionToInput(pred, ship, enemyWorldData) {
+function predictionToInput(pred, ship) {
     const forward  = pred[0] >= DISCRETE_THRESHOLD;
     const back     = pred[1] >= DISCRETE_THRESHOLD;
     const left     = pred[2] >= DISCRETE_THRESHOLD;
@@ -98,17 +97,35 @@ function predictionToInput(pred, ship, enemyWorldData) {
     const fastTurn = pred[7] >= DISCRETE_THRESHOLD;
     const fire     = pred[8] >= DISCRETE_THRESHOLD;
 
-    // Unscale continuous outputs from sigmoid [0,1] to [-1,1]
-    const leadVelocity = pred[9] * 2 - 1;
-    const leadFacing   = pred[10] * 2 - 1;
-    const residualX    = pred[11] * 2 - 1;
-    const residualY    = pred[12] * 2 - 1;
+    // Unscale dot-product direction outputs from sigmoid [0,1] to [-1,1]
+    const dotForward = pred[9] * 2 - 1;
+    const dotRight   = pred[10] * 2 - 1;
+    // aimDist: stored as [-1,1] in training data, scaled to [0,1] for sigmoid.
+    // Round-trip: (pred * 2 - 1 + 1) / 2 = pred. So pred[11] is the [0,1] distance.
+    const aimDist    = pred[11];
 
-    // Reconstruct world-space aim from engaged enemy (slot 0) + leads + residual
-    const aimTarget = reconstructWorldAim(
-        ship, enemyWorldData,
-        leadVelocity, leadFacing, residualX, residualY
-    );
+    // Reconstruct ship-local aim offset from dot products + distance
+    // dotForward = cos(angle from forward), dotRight = sin(angle from forward)
+    // Ship local: +Y = forward, +X = right
+    const angle = Math.atan2(dotRight, dotForward);
+    const worldDist = aimDist * AIM_HALF_RANGE;
+    const localAim = {
+        x: Math.sin(angle) * worldDist,   // right component
+        y: Math.cos(angle) * worldDist    // forward component
+    };
+
+    // Rotate from ship-local to world space and add to ship position
+    const shipAngle = -ship.body.angle;
+    const worldOffset = rotateVector(localAim, shipAngle);
+
+    const scale = getArenaPhysicsScale();
+    const shipX = ship.body.position.x / scale;
+    const shipY = -ship.body.position.y / scale;
+
+    const aimTarget = {
+        x: shipX + worldOffset.x,
+        y: shipY + worldOffset.y
+    };
 
     return {
         forward,
@@ -121,58 +138,6 @@ function predictionToInput(pred, ship, enemyWorldData) {
         fastTurn,
         fire,
         aimTarget
-    };
-}
-
-// ============================================================================
-// Aim reconstruction
-// ============================================================================
-
-/**
- * Reconstructs the world-space aim target from model predictions.
- * Uses the single engaged enemy in slot 0.
- * finalAim = structuredAim (enemy + leads) + residual (ship-local correction)
- */
-function reconstructWorldAim(ship, enemyWorldData, leadVel, leadFace, resX, resY) {
-    const scale = getArenaPhysicsScale();
-    const shipPosX = ship.body.position.x / scale;
-    const shipPosY = -ship.body.position.y / scale;
-    const shipAngle = -ship.body.angle;
-
-    // Structured aim: enemy position + lead offsets (falls back to ship pos)
-    let structX = shipPosX;
-    let structY = shipPosY;
-
-    const hasTarget = enemyWorldData
-        && enemyWorldData[0]
-        && enemyWorldData[0].present;
-
-    if (hasTarget) {
-        const enemy = enemyWorldData[0];
-        structX = enemy.pos.x;
-        structY = enemy.pos.y;
-
-        // Velocity lead
-        const speed = length(enemy.vel);
-        if (speed > MIN_ENEMY_SPEED) {
-            const velDir = normalize(enemy.vel);
-            structX += leadVel * MAX_LEAD_DISTANCE * velDir.x;
-            structY += leadVel * MAX_LEAD_DISTANCE * velDir.y;
-        }
-
-        // Facing lead
-        const faceDir = { x: Math.cos(enemy.forwardAngle), y: Math.sin(enemy.forwardAngle) };
-        structX += leadFace * MAX_LEAD_DISTANCE * faceDir.x;
-        structY += leadFace * MAX_LEAD_DISTANCE * faceDir.y;
-    }
-
-    // Residual: ship-local [-1,1] → world offset
-    const localRes = { x: resX * AIM_HALF_RANGE, y: resY * AIM_HALF_RANGE };
-    const worldRes = rotateVector(localRes, shipAngle);
-
-    return {
-        x: structX + worldRes.x,
-        y: structY + worldRes.y
     };
 }
 

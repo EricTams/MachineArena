@@ -145,7 +145,10 @@ function applyForceAtPosition(body, worldPos, force) {
 function applyTorque(body, torque) {
     // Convert world convention (positive = CCW) to Matter.js convention (positive = CW)
     const physicsTorque = -torque;
-    const angularAccel = physicsTorque / body.inertia;
+    // Divide by mass (not inertia) as a gameplay simplification:
+    // angularThrustForce values are tuned to this formula. Using inertia
+    // would require scaling values up ~400x for compound bodies.
+    const angularAccel = physicsTorque / body.mass;
     Body.setAngularVelocity(body, body.angularVelocity + angularAccel * 0.016);
 }
 

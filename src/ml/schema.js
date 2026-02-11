@@ -3,14 +3,14 @@
 // Schema version tracks the format of sensing + action data so that
 // saved datasets and models can detect incompatibility when the layout changes.
 
-const SCHEMA_VERSION = 7;
+const SCHEMA_VERSION = 9;
 
 // Sensing input size (from sensing.js flattenSensingState)
-// v7: single engaged enemy slot (1 * 9 = 9) instead of 4 slots (4 * 9 = 36)
-const SENSING_SIZE = 59;
+// v8: added 3 mouse sensing features (dotForward, dotRight, distance)
+const SENSING_SIZE = 62;
 
-// Action output: 9 discrete + 4 continuous = 13 dimensions
-// v7: removed target selection one-hot (single enemy slot, no selection needed)
+// Action output: 9 discrete + 3 continuous = 12 dimensions
+// v9: absolute aim position as dot products relative to ship (no delta/accumulator)
 //
 // [0]  forward         (0/1)
 // [1]  back            (0/1)
@@ -21,30 +21,24 @@ const SENSING_SIZE = 59;
 // [6]  turnToward      (0/1)  - right mouse held, turning toward mouse
 // [7]  fastTurn        (0/1)  - shift held, thruster-assisted rotation
 // [8]  weaponActive    (0/1)  - any cannon on cooldown
-// [9]  aimLeadVelocity (float) - lead along enemy velocity direction [-1,1]
-// [10] aimLeadFacing   (float) - lead along enemy facing direction [-1,1]
-// [11] aimResidualX    (float) - ship-relative X correction [-1,1]
-// [12] aimResidualY    (float) - ship-relative Y correction [-1,1]
-const ACTION_SIZE = 13;
+// [9]  aimDotForward   (float) - dot(normalized aim dir, ship forward) [-1,1]
+// [10] aimDotRight     (float) - dot(normalized aim dir, ship right)   [-1,1]
+// [11] aimDist         (float) - aim distance from ship, normalized [0,1]
+const ACTION_SIZE = 12;
 
 // Which action indices are discrete (boolean 0/1) vs continuous (float)
 const DISCRETE_ACTION_INDICES = [0, 1, 2, 3, 4, 5, 6, 7, 8];
-const CONTINUOUS_ACTION_INDICES = [9, 10, 11, 12];
+const CONTINUOUS_ACTION_INDICES = [9, 10, 11];
 
 // Human-readable names for each action dimension
 const ACTION_NAMES = [
     'forward', 'back', 'left', 'right',
     'turnLeft', 'turnRight', 'turnToward', 'fastTurn',
     'weaponActive',
-    'aimLeadVelocity', 'aimLeadFacing',
-    'aimResidualX', 'aimResidualY'
+    'aimDotForward', 'aimDotRight', 'aimDist'
 ];
 
-// Shared aim constants used by recording and inference
-const MAX_LEAD_DISTANCE = 10;   // Normalization scale for lead projections (world units)
-const MIN_ENEMY_SPEED = 0.1;    // Below this speed, velocity-based lead is zero
-
-// Human-readable names for all 59 sensing features (matches flattenSensingState order)
+// Human-readable names for all 62 sensing features (matches flattenSensingState order)
 const SENSING_FEATURE_NAMES = buildSensingFeatureNames();
 
 function buildSensingFeatureNames() {
@@ -73,6 +67,8 @@ function buildSensingFeatureNames() {
         const b = `blocker${i}`;
         names.push(`${b}.present`, `${b}.dist`, `${b}.angle`, `${b}.radius`);
     }
+    // Mouse (3) - dot-product encoding of aim position relative to ship
+    names.push('mouse.dotForward', 'mouse.dotRight', 'mouse.distance');
     return names;
 }
 
@@ -83,7 +79,5 @@ export {
     DISCRETE_ACTION_INDICES,
     CONTINUOUS_ACTION_INDICES,
     ACTION_NAMES,
-    SENSING_FEATURE_NAMES,
-    MAX_LEAD_DISTANCE,
-    MIN_ENEMY_SPEED
+    SENSING_FEATURE_NAMES
 };

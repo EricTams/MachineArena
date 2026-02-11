@@ -1,5 +1,102 @@
 # Changelog
 
+## v0.2.2 — Feb 10, 2026
+
+### TL;DR
+
+Aim system reworked from enemy-relative leads + residual (4 floats) to absolute dot-product encoding relative to the ship (3 floats), bumping the schema to v9. Training now runs in two phases — broad training on all accumulated fight data from IndexedDB, then fine-tuning on the latest fight for recency bias. A new post-fight training results screen shows loss curves, accuracy metrics, per-action rate bars, and a side-by-side comparison of the old model's live predictions. Mouse aim position is now included in the NN sensing input. The inline ML panel has been removed. Torque calculation reverted to mass-based, fixing ship turning. Training accuracy still needs work.
+
+---
+
+### New Features
+
+#### `src/fightOutcome.js` — Training Results Screen
+- New `showTrainingResults()` overlay shown after auto-training, before the victory/defeat banner
+- Displays loss curve (train + val) drawn on a canvas element
+- Shows action accuracy and aim accuracy as headline metrics
+- Per-action rate comparison bars (predicted vs actual) with divergence warnings
+- Session trend display (accuracy across recent training sessions)
+- Optional two-column layout: left column shows new model results, right column shows old model's live prediction accuracy (when prediction tracker data is available)
+- Player clicks Continue to proceed to the fight outcome screen
+
+#### `src/ml/predictionTracker.js` — Prediction Tracker (new file)
+- Runs the pre-fight model alongside the player during recorded fights
+- `initTracker(model)` loads the existing model at fight start
+- `trackFrame()` runs inference each frame and records both predicted and actual actions
+- `getTrackingSummary()` computes per-action discrete accuracy and aim MSE after the fight
+- Results displayed in the right column of the training results screen
+
+#### `src/arena/sensing.js` — Mouse Aim Sensing (v8)
+- New `computeMouseSensing()` encodes the aim position as dot products relative to ship forward/right vectors plus normalized distance
+- Added 3 features to flattened sensing state: `mouse.dotForward`, `mouse.dotRight`, `mouse.distance`
+- Sensing state size 59 → 62
+- Uses previous frame's mouse position so the NN input reflects the state before the movement the output describes
+
+#### `src/arena/arena.js` — AI Toggle
+- New `toggleAiControl()` async function loads model from IndexedDB and switches between player/AI control
+- Tracks `previousMousePos` for one-frame-delayed mouse sensing
+
+---
+
+### Changes
+
+#### Schema v7 → v9 (`src/ml/schema.js`)
+- **Action size 13 → 12**: replaced 4 aim channels (leadVelocity, leadFacing, residualX, residualY) with 3 (aimDotForward, aimDotRight, aimDist)
+- **Sensing size 59 → 62**: added 3 mouse sensing features
+- Removed `MAX_LEAD_DISTANCE` and `MIN_ENEMY_SPEED` exports (no longer needed)
+
+#### `src/ml/recording.js` — Aim Label Rework
+- Replaced `computeAimLeads()` + `computeAimResidual()` + `reconstructStructuredAim()` with a single `computeMouseAim()` that returns dot-product encoding
+- `flattenAction()` now takes `mouseAim` object instead of separate leads and residual
+- New `isAnyCannonOnCooldown()` helper for weapon-active label
+- Removed dependency on `rotateVector`, `length`, `normalize` math helpers
+
+#### `src/ml/mlController.js` — Direct Aim Reconstruction
+- `predictionToInput()` reconstructs world-space aim directly from predicted dot products + distance instead of enemy-relative leads + residual
+- Removed `reconstructWorldAim()` and all enemy-based aim reconstruction logic
+- Removed dependency on `length`, `normalize` math helpers and `MAX_LEAD_DISTANCE`, `MIN_ENEMY_SPEED` constants
+
+#### `src/ml/model.js` — Two-Phase Training & Early Stopping
+- `trainModel()` now implements manual early stopping on `val_loss` with patience of 5 epochs
+- `trainModel()` returns `{ loss, valLoss }` arrays instead of raw `tf.History`
+- New `evaluateModel()` returns predicted/actual action rates alongside accuracy and aim MSE
+- `saveModelWeights()` accepts session metadata for trend tracking
+- New `getSessionHistory()` retrieves training session history
+- New `clearModelWeights()` wipes IndexedDB model weights and metadata
+
+#### `src/main.js` — Training Pipeline Overhaul
+- `autoTrainFromRecording()` now runs two-phase training: Phase 1 on all IndexedDB data (50 epochs), Phase 2 fine-tune on latest fight (10 epochs)
+- Fight data saved to IndexedDB via `saveRuns()`; loaded with `loadRuns()`; capped at 30 accumulated runs
+- `startRecordingWithTracker()` initialises prediction tracker alongside recording when a trained model exists
+- Starting a new run clears in-memory runs, IndexedDB training data, and model weights
+- Post-fight flow: training spinner → training results screen (click) → victory/defeat (click)
+- `startFightWithPreset()` changed to async
+
+---
+
+### Bug Fixes
+
+#### `src/arena/arenaPhysics.js` — Torque Calculation Reverted
+- `applyTorque()` reverted to dividing by `body.mass` instead of `body.inertia` — angular thrust values are tuned for mass-based formula; using inertia would require ~400x scaling for compound bodies
+- Fixes ship turning feeling broken after the v0.2.1 inertia change
+
+---
+
+### Removed
+
+#### `src/ml/mlPanel.js` — ML Panel Deleted
+- Inline ML training/status panel removed entirely
+- `toggleAiControl` moved to `src/arena/arena.js`
+- `M` key binding removed from arena input (`src/arena/arenaInput.js`)
+
+---
+
+### Known Issues
+
+- ML training accuracy is still poor — the model does not yet learn to replicate player behavior well despite the aim rework and two-phase training
+
+---
+
 ## v0.2.1 — Feb 10, 2026
 
 ### TL;DR

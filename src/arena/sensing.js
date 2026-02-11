@@ -44,8 +44,8 @@ const SECTOR_COUNT = 8;  // Threat radar sectors
 const HAZARD_AWARENESS_RANGE = 10;  // units beyond damage edge where proximity = 0
 const WALL_AWARENESS_RANGE = 15;    // units from wall where proximity = 0
 
-// Total size of flattened sensing state (v7: single enemy slot)
-const SENSING_STATE_SIZE = 59;
+// Total size of flattened sensing state (v8: single enemy slot + 3 mouse features)
+const SENSING_STATE_SIZE = 62;
 
 // ============================================================================
 // Main Sensing Function
@@ -60,9 +60,12 @@ const SENSING_STATE_SIZE = 59;
  * @param {Array} projectiles - Array of active projectiles
  * @param {object|null} engagementTarget - World-space point (e.g. mousePos) for
  *   selecting the engaged enemy. If null, nearest enemy is used.
+ * @param {object|null} aimPosition - World-space aim position {x, y} for mouse
+ *   sensing features. Uses previous frame's mouse/aim position so the NN input
+ *   reflects the state before the movement the output describes. Null = zeros.
  * @returns {object} Complete sensing state
  */
-function computeSensingState(ship, allShips, hazards, blockers, projectiles, engagementTarget) {
+function computeSensingState(ship, allShips, hazards, blockers, projectiles, engagementTarget, aimPosition) {
     const scale = getArenaPhysicsScale();
     const dimensions = getArenaDimensions();
     
@@ -99,6 +102,9 @@ function computeSensingState(ship, allShips, hazards, blockers, projectiles, eng
     // Compute blocker sensing
     const blockerSensing = computeBlockersSensing(shipPos, shipAngle, shipForward, blockers || []);
     
+    // Compute mouse/aim sensing (dot-product encoding relative to ship)
+    const mouse = computeMouseSensing(shipPos, shipForward, aimPosition);
+    
     return {
         self,
         walls,
@@ -106,6 +112,7 @@ function computeSensingState(ship, allShips, hazards, blockers, projectiles, eng
         enemies: enemyResult.sensing,
         hazards: hazardSensing,
         blockers: blockerSensing,
+        mouse,
         // AIDEV-NOTE: enemyWorldData is a side-channel of raw world-space enemy
         // data (pos, vel, facing) used by recording and ML inference for aim
         // reconstruction. NOT included in the flattened NN input.
@@ -636,6 +643,48 @@ function createEmptyBlockerSlot() {
 }
 
 // ============================================================================
+// Mouse / Aim Sensing
+// ============================================================================
+
+/**
+ * Computes dot-product encoding of aim position relative to ship.
+ * Direction is encoded as dot products of normalized ship-to-aim direction
+ * with the ship's forward and right unit vectors, plus a scalar distance.
+ *
+ * @param {object} shipPos - Ship world position {x, y}
+ * @param {number} shipForward - Ship forward direction as atan2 angle
+ * @param {object|null} aimPosition - World-space aim position {x, y}, or null
+ * @returns {{ dotForward: number, dotRight: number, distance: number }}
+ */
+function computeMouseSensing(shipPos, shipForward, aimPosition) {
+    if (!aimPosition) {
+        return { dotForward: 0, dotRight: 0, distance: 0 };
+    }
+
+    const dx = aimPosition.x - shipPos.x;
+    const dy = aimPosition.y - shipPos.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+
+    if (dist < 1e-6) {
+        return { dotForward: 0, dotRight: 0, distance: 0 };
+    }
+
+    // Normalized direction from ship to aim position
+    const dirX = dx / dist;
+    const dirY = dy / dist;
+
+    // Ship's forward and right unit vectors (from the atan2 direction angle)
+    const forwardDir = { x: Math.cos(shipForward), y: Math.sin(shipForward) };
+    const rightDir = { x: Math.cos(shipForward - Math.PI / 2), y: Math.sin(shipForward - Math.PI / 2) };
+
+    const dotForward = dirX * forwardDir.x + dirY * forwardDir.y;  // [-1, 1]
+    const dotRight = dirX * rightDir.x + dirY * rightDir.y;        // [-1, 1]
+    const distance = clamp(dist / (ARENA_DIAGONAL / 2), 0, 1);
+
+    return { dotForward, dotRight, distance };
+}
+
+// ============================================================================
 // Flatten for Neural Network
 // ============================================================================
 
@@ -697,6 +746,11 @@ function flattenSensingState(state) {
         values.push(blocker.angleFromForward);
         values.push(blocker.radius);
     }
+    
+    // Mouse / aim position (3 values -- dot-product encoding relative to ship)
+    values.push(state.mouse.dotForward);
+    values.push(state.mouse.dotRight);
+    values.push(state.mouse.distance);
     
     return new Float32Array(values);
 }

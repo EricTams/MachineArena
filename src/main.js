@@ -16,12 +16,15 @@ import { hasValidRun, getCurrentRun, startNewRun, getRunShipName, getRunMoney, a
 import { saveShip, listSavedShips, loadSavedShip, deleteSavedShip } from './shipPersistence.js';
 import {
     importModelFromJson, exportModelAsJson, saveModelWeights, loadModelWeights, getModelStats,
-    createModel, getDefaultConfig, prepareTrainingData, trainModel, disposeTrainingData
+    getSessionHistory, createModel, getDefaultConfig, prepareTrainingData, trainModel,
+    evaluateModel, disposeTrainingData, clearModelWeights
 } from './ml/model.js';
 import { startRecording, stopRecording, isRecording, getCompletedRuns, clearRuns } from './ml/recording.js';
+import { initTracker, getTrackingSummary, disposeTracker } from './ml/predictionTracker.js';
+import { saveRuns, loadRuns, clearSavedRuns } from './ml/persistence.js';
 import { initFirebase, isOnline, uploadFighter, fetchFighters, fetchFighter, fetchFighterForStage, fetchFighterCountsByStage } from './firebase.js';
 import { getCurrentStage, advanceStage, retreatStage } from './stages.js';
-import { showTrainingSpinner, updateTrainingProgress, showVictory, showDefeat, hideFightOutcome } from './fightOutcome.js';
+import { showTrainingSpinner, updateTrainingProgress, showTrainingResults, showVictory, showDefeat, hideFightOutcome } from './fightOutcome.js';
 import { initShop, showShop, hideShop, rollShop } from './shop.js';
 
 // Game state
@@ -331,11 +334,18 @@ function showLandingScreen() {
 
         // Start New Run button: create run with the displayed ship name
         if (startBtn) {
-            startBtn.addEventListener('click', () => {
+            startBtn.addEventListener('click', async () => {
                 if (!validateAndSavePlayerName()) return;
                 startNewRun(pendingShipName);
+
+                // Wipe stale ML data from previous run
+                clearRuns();                 // in-memory recorded runs
+                await clearSavedRuns();      // IndexedDB training data
+                await clearModelWeights();   // IndexedDB model weights + metadata
+
                 setShipName(pendingShipName);
                 currentShipName = pendingShipName;
+                refreshAiStatusIndicator();
                 resolve();
             });
         }
@@ -741,7 +751,7 @@ async function enterCustomFight(pilot, enemy, arenaType) {
             customFightManualPilot = (pilot === 'manual');
             wireCustomFightOutcome(pilot);
             if (pilot === 'manual') {
-                startRecording();
+                await startRecordingWithTracker();
             } else {
                 // AI pilot — switch to AI control
                 await switchPlayerToAi();
@@ -784,7 +794,7 @@ async function enterCustomFight(pilot, enemy, arenaType) {
             customFightManualPilot = (pilot === 'manual');
             wireCustomFightOutcome(pilot);
             if (pilot === 'manual') {
-                startRecording();
+                await startRecordingWithTracker();
             } else {
                 await switchPlayerToAi();
             }
@@ -816,7 +826,7 @@ async function enterCustomFight(pilot, enemy, arenaType) {
         customFightManualPilot = (pilot === 'manual');
         wireCustomFightOutcome(pilot);
         if (pilot === 'manual') {
-            startRecording();
+            await startRecordingWithTracker();
         } else {
             await switchPlayerToAi();
         }
@@ -859,6 +869,10 @@ async function handleCustomFightEnd(outcome, pilot) {
     // Stop recording
     if (isRecording()) stopRecording();
 
+    // Capture prediction tracker summary before training replaces the model
+    const predictionSummary = getTrackingSummary();
+    disposeTracker();
+
     if (pilot === 'manual') {
         // Freeze the arena so it stops simulating during training
         pauseArena();
@@ -866,6 +880,11 @@ async function handleCustomFightEnd(outcome, pilot) {
         showTrainingSpinner();
         const trained = await autoTrainFromRecording();
         clearRuns();
+        // Show training results screen (player clicks Continue to proceed)
+        if (trained && trained.metrics) {
+            if (predictionSummary) trained.predictionSummary = predictionSummary;
+            await showTrainingResults(trained);
+        }
         if (trained) trained.model.dispose();
         refreshAiStatusIndicator();
     }
@@ -1259,7 +1278,7 @@ async function fightAgainstOnlineOpponent(docId) {
     );
 
     if (success) {
-        startRecording();
+        await startRecordingWithTracker();
         showDesignMode(false);
         updateFightButtonText();
     } else {
@@ -1274,57 +1293,156 @@ async function fightAgainstOnlineOpponent(docId) {
 // Track current ship name for uploads (set from landing screen or preset load)
 let currentShipName = 'unnamed';
 
-// Auto-training config: cumulative epochs per fight
-const AUTO_TRAIN_EPOCHS = 50;
+/**
+ * Starts recording and initialises the prediction tracker if a trained model exists.
+ * The tracker runs the pre-fight model alongside the player each frame so we can
+ * measure predictive performance on the training results screen.
+ */
+async function startRecordingWithTracker() {
+    startRecording();
+    try {
+        const loaded = await loadModelWeights();
+        if (loaded) {
+            initTracker(loaded.model);
+        }
+    } catch (err) {
+        console.warn('Could not load model for prediction tracking:', err.message);
+    }
+}
+
+// Auto-training config
+const AUTO_TRAIN_EPOCHS = 50;   // Phase 1: broad training on all accumulated data
+const FINETUNE_EPOCHS = 10;     // Phase 2: fine-tune on latest fight for recency bias
+const MAX_TRAINING_RUNS = 30;   // Cap accumulated runs to prevent unbounded growth
 
 /**
- * Auto-trains the ML model from recorded fight data, then saves weights.
- * Returns the trained model and config, or null if training failed.
- * @returns {Promise<{model, config}|null>}
+ * Auto-trains the ML model using two-phase training:
+ *   Phase 1: Train on all accumulated fight data from IndexedDB (broad style learning)
+ *   Phase 2: Fine-tune on just the latest fight (recency bias for new equipment/tactics)
+ * Returns the trained model, config, and full diagnostics for the training results screen.
+ * @returns {Promise<{model, config, lossHistory, valLossHistory, metrics, trainFrames, totalRuns, epochsRun, sessions}|null>}
  */
 async function autoTrainFromRecording() {
-    const runs = getCompletedRuns();
-    if (runs.length === 0) {
+    const currentRuns = getCompletedRuns();
+    if (currentRuns.length === 0) {
         console.log('No recorded data to train on');
         return null;
     }
 
-    const config = getDefaultConfig();
-    config.epochs = AUTO_TRAIN_EPOCHS;
+    // Save this fight's data to IndexedDB for accumulation
+    await saveRuns(currentRuns);
 
-    let data;
+    // Load ALL saved runs from IndexedDB (includes the one we just saved)
+    let allRuns = await loadRuns();
+    if (allRuns.length === 0) {
+        console.warn('No runs found in IndexedDB after save');
+        return null;
+    }
+
+    // Cap to most recent N runs to keep model reflecting current play style
+    if (allRuns.length > MAX_TRAINING_RUNS) {
+        allRuns = allRuns.slice(allRuns.length - MAX_TRAINING_RUNS);
+    }
+    const totalRuns = allRuns.length;
+
+    const config = getDefaultConfig();
+
+    // Prepare full dataset (all accumulated runs)
+    let fullData;
     try {
-        data = prepareTrainingData(runs, config.valRunFraction);
+        fullData = prepareTrainingData(allRuns, config.valRunFraction);
     } catch (err) {
         console.warn('Auto-train data error:', err.message);
         return null;
     }
 
-    // Try to continue training from existing weights (accumulates learning across fights)
+    // Load existing model or create fresh
     let model;
     const existing = await loadModelWeights();
     if (existing) {
         model = existing.model;
-        console.log('Continuing training from existing weights');
+        console.log(`Continuing from existing weights (training on ${totalRuns} fights)`);
     } else {
         model = createModel(config);
-        console.log('No existing weights — training from scratch');
+        console.log(`No existing weights — training from scratch on ${totalRuns} fights`);
     }
 
+    let allLoss = [];
+    let allValLoss = [];
+
     try {
-        const onEpochEnd = (epoch, logs) => {
-            updateTrainingProgress(epoch, config.epochs, logs?.loss);
+        // ---- Phase 1: Broad training on all accumulated data ----
+        config.epochs = AUTO_TRAIN_EPOCHS;
+        const totalEpochs = AUTO_TRAIN_EPOCHS + FINETUNE_EPOCHS;
+
+        const onPhase1EpochEnd = (epoch, logs) => {
+            updateTrainingProgress(epoch, totalEpochs, logs?.loss);
         };
-        await trainModel(model, data, config, onEpochEnd);
-        await saveModelWeights(model, config, { newFrames: data.train.numFrames });
-        console.log(`Auto-trained on ${data.train.numFrames} frames (${AUTO_TRAIN_EPOCHS} epochs)`);
-        return { model, config };
+        const phase1 = await trainModel(model, fullData, config, onPhase1EpochEnd);
+        allLoss.push(...phase1.loss);
+        allValLoss.push(...phase1.valLoss);
+        const phase1Epochs = phase1.loss.length;
+        console.log(`Phase 1: ${phase1Epochs}/${AUTO_TRAIN_EPOCHS} epochs on ${fullData.train.numFrames} frames`);
+
+        // ---- Phase 2: Fine-tune on latest fight for recency bias ----
+        let finetuneData;
+        try {
+            // Use valRunFraction=0 so all current fight data goes to training
+            // (validation is already measured from the full dataset in phase 1)
+            finetuneData = prepareTrainingData(currentRuns, 0);
+        } catch (err) {
+            console.warn('Fine-tune data error (skipping phase 2):', err.message);
+            finetuneData = null;
+        }
+
+        if (finetuneData) {
+            config.epochs = FINETUNE_EPOCHS;
+            const onPhase2EpochEnd = (epoch, logs) => {
+                updateTrainingProgress(phase1Epochs + epoch, totalEpochs, logs?.loss);
+            };
+            const phase2 = await trainModel(model, finetuneData, config, onPhase2EpochEnd);
+            allLoss.push(...phase2.loss);
+            allValLoss.push(...phase2.valLoss);
+            console.log(`Phase 2: ${phase2.loss.length}/${FINETUNE_EPOCHS} fine-tune epochs on latest fight`);
+            disposeTrainingData(finetuneData);
+        }
+
+        // Evaluate final model on the full validation set
+        const metrics = evaluateModel(model, fullData.val);
+        const epochsRun = allLoss.length;
+        const finalValLoss = allValLoss[allValLoss.length - 1];
+
+        // Save weights + session entry for trend tracking
+        await saveModelWeights(model, config, {
+            newFrames: fullData.train.numFrames,
+            session: {
+                valLoss: finalValLoss,
+                accuracy: metrics.overallAccuracy,
+                aimMSE: metrics.aimMSE,
+                epochsRun
+            }
+        });
+
+        // Load session history for trend display
+        const sessions = await getSessionHistory();
+
+        console.log(`Auto-trained on ${fullData.train.numFrames} frames from ${totalRuns} fights (${epochsRun} total epochs)`);
+        return {
+            model, config,
+            lossHistory: allLoss,
+            valLossHistory: allValLoss,
+            metrics,
+            trainFrames: fullData.train.numFrames,
+            totalRuns,
+            epochsRun,
+            sessions
+        };
     } catch (err) {
         console.warn('Auto-train failed:', err.message);
         model.dispose();
         return null;
     } finally {
-        disposeTrainingData(data);
+        disposeTrainingData(fullData);
     }
 }
 
@@ -1458,7 +1576,7 @@ async function fightAgainstSavedShip(shipId) {
     );
 
     if (success) {
-        startRecording();
+        await startRecordingWithTracker();
         showDesignMode(false);
         updateFightButtonText();
     } else {
@@ -1555,6 +1673,7 @@ function exitArenaMode() {
 
     // Stop auto-recording if active
     if (isRecording()) stopRecording();
+    disposeTracker();
 
     isStageFight = false;
     isCustomFight = false;
@@ -1641,7 +1760,7 @@ async function startStageFightWithRecord(record) {
     if (success) {
         isStageFight = true;
         wireStageOutcomeCallbacks();
-        startRecording();
+        await startRecordingWithTracker();
         showDesignMode(false);
         updateFightButtonText();
         console.log(`Stage ${currentFightStage}: Fighting ${record.playerName}'s ${record.shipName}`);
@@ -1654,7 +1773,7 @@ async function startStageFightWithRecord(record) {
  * Starts a fight against a specific preset ship by name.
  * @param {string} presetName - Key from SHIP_PRESETS (e.g. 'starter', 'gunboat')
  */
-function startFightWithPreset(presetName) {
+async function startFightWithPreset(presetName) {
     const opponentPieces = createPiecesFromLayout(SHIP_PRESETS[presetName]);
     if (opponentPieces.length === 0) {
         console.error('Failed to create opponent from preset:', presetName);
@@ -1678,7 +1797,7 @@ function startFightWithPreset(presetName) {
     if (success) {
         isStageFight = true;
         wireStageOutcomeCallbacks();
-        startRecording();
+        await startRecordingWithTracker();
         showDesignMode(false);
         updateFightButtonText();
         console.log(`Fighting preset: ${presetName}`);
@@ -1707,7 +1826,7 @@ function wireStageOutcomeCallbacks() {
 
 /**
  * Handles the end of a stage fight (win or lose).
- * Stops recording, auto-trains, and shows the appropriate overlay.
+ * Stops recording, auto-trains, shows training results, then shows outcome overlay.
  * @param {'won'|'lost'} outcome
  */
 async function handleStageFightEnd(outcome) {
@@ -1715,6 +1834,10 @@ async function handleStageFightEnd(outcome) {
 
     // Stop recording player actions
     if (isRecording()) stopRecording();
+
+    // Capture prediction tracker summary before training replaces the model
+    const predictionSummary = getTrackingSummary();
+    disposeTracker();
 
     // Freeze the arena so it stops simulating during training
     pauseArena();
@@ -1730,6 +1853,12 @@ async function handleStageFightEnd(outcome) {
 
     // Refresh AI status indicator
     refreshAiStatusIndicator();
+
+    // Show training results screen (player clicks Continue to proceed)
+    if (trained && trained.metrics) {
+        if (predictionSummary) trained.predictionSummary = predictionSummary;
+        await showTrainingResults(trained);
+    }
 
     // Exit the arena (clears physics, ships, etc.)
     exitArena();

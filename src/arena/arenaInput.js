@@ -3,7 +3,7 @@
 import { toggleThrustDebug } from './thrustDebug.js';
 import { toggleSensingDebug } from './sensingDebug.js';
 import { toggleRecording } from '../ml/recording.js';
-import { toggleMlPanel, toggleAiControl } from '../ml/mlPanel.js';
+import { toggleAiControl } from './arena.js';
 
 // Input state
 const inputState = {
@@ -123,10 +123,6 @@ function onKeyDown(event) {
         case 'KeyR':
             // Toggle ML recording
             toggleRecording();
-            break;
-        case 'KeyM':
-            // Toggle ML panel
-            toggleMlPanel();
             break;
         case 'KeyI':
             // Toggle AI control

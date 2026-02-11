@@ -1,8 +1,9 @@
 // Model module - TF.js model creation, training, evaluation, and weight persistence
 //
 // Uses a config-driven dense network. Output uses sigmoid activation so
-// all values are in [0,1]. Continuous action channels (leads + residual)
-// are scaled from [-1,1] to [0,1] for training and back for inference.
+// all values are in [0,1]. Continuous action channels (mouse delta dot-product
+// direction + magnitude) are scaled from [-1,1] to [0,1] for training and
+// back for inference. moveDist is naturally [0,1].
 
 /* global tf */
 
@@ -217,15 +218,17 @@ function logClassWeights(weights) {
 // Training
 // ============================================================================
 
+const EARLY_STOP_PATIENCE = 5;
+
 /**
  * Trains the model on prepared data using weighted BCE + MSE composite loss.
  * Automatically computes class weights from training labels so rare actions
- * (like fire) are properly learned.
+ * (like fire) are properly learned. Uses manual early stopping on val_loss.
  * @param {tf.Sequential} model - The model to train
  * @param {{ train, val }} data - From prepareTrainingData
  * @param {object} config - Training config (epochs, batchSize, learningRate)
  * @param {function} onEpochEnd - Callback(epoch, logs) for progress
- * @returns {tf.History} Training history
+ * @returns {{ loss: number[], valLoss: number[] }} Per-epoch loss history
  */
 async function trainModel(model, data, config, onEpochEnd) {
     const classWeights = computeClassWeights(data.train.y);
@@ -238,15 +241,42 @@ async function trainModel(model, data, config, onEpochEnd) {
         loss
     });
 
+    // Manual early stopping state (tf.callbacks.earlyStopping is broken in some TF.js versions)
+    let bestValLoss = Infinity;
+    let wait = 0;
+
     try {
         const history = await model.fit(data.train.x, data.train.y, {
             epochs: config.epochs,
             batchSize: config.batchSize,
             validationData: [data.val.x, data.val.y],
             shuffle: true,
-            callbacks: onEpochEnd ? { onEpochEnd } : undefined
+            callbacks: {
+                onEpochEnd: (epoch, logs) => {
+                    // Forward to caller's progress callback
+                    if (onEpochEnd) onEpochEnd(epoch, logs);
+
+                    // Manual early stopping on val_loss
+                    const valLoss = logs?.val_loss;
+                    if (valLoss != null) {
+                        if (valLoss < bestValLoss) {
+                            bestValLoss = valLoss;
+                            wait = 0;
+                        } else {
+                            wait++;
+                            if (wait >= EARLY_STOP_PATIENCE) {
+                                console.log(`Early stopping at epoch ${epoch + 1} (val_loss hasn't improved for ${EARLY_STOP_PATIENCE} epochs)`);
+                                model.stopTraining = true;
+                            }
+                        }
+                    }
+                }
+            }
         });
-        return history;
+        return {
+            loss: history.history.loss,
+            valLoss: history.history.val_loss
+        };
     } finally {
         // Re-compile with named loss so saved models don't carry closure references
         model.compile({
@@ -263,10 +293,10 @@ async function trainModel(model, data, config, onEpochEnd) {
 
 /**
  * Evaluates model on validation data, returns per-action accuracy,
- * precision, recall, and aim MSE.
+ * precision, recall, aim MSE, and predicted/actual action rates.
  * @param {tf.Sequential} model
  * @param {{ x, y }} valData
- * @returns {{ discreteAccuracies, discretePrecision, discreteRecall, aimMSE, overallAccuracy }}
+ * @returns {{ discreteAccuracies, discretePrecision, discreteRecall, predictedRates, actualRates, aimMSE, overallAccuracy }}
  */
 function evaluateModel(model, valData) {
     return tf.tidy(() => {
@@ -275,16 +305,20 @@ function evaluateModel(model, valData) {
         const actualArr = valData.y.arraySync();
         const n = predArr.length;
 
-        // Per-action discrete metrics: accuracy, precision, recall
+        // Per-action discrete metrics: accuracy, precision, recall, and rates
         const discreteAccuracies = {};
         const discretePrecision = {};
         const discreteRecall = {};
+        const predictedRates = {};
+        const actualRates = {};
         for (const idx of DISCRETE_ACTION_INDICES) {
             const m = countDiscreteOutcomes(predArr, actualArr, n, idx);
             const name = ACTION_NAMES[idx];
             discreteAccuracies[name] = m.correct / n;
             discretePrecision[name] = m.predPos > 0 ? m.truePos / m.predPos : null;
             discreteRecall[name] = m.actualPos > 0 ? m.truePos / m.actualPos : null;
+            predictedRates[name] = n > 0 ? m.predPos / n : 0;
+            actualRates[name] = n > 0 ? m.actualPos / n : 0;
         }
 
         // Aim MSE (on scaled [0,1] values)
@@ -302,7 +336,7 @@ function evaluateModel(model, valData) {
         const overallAccuracy = Object.values(discreteAccuracies)
             .reduce((a, b) => a + b, 0) / DISCRETE_ACTION_INDICES.length;
 
-        return { discreteAccuracies, discretePrecision, discreteRecall, aimMSE, overallAccuracy };
+        return { discreteAccuracies, discretePrecision, discreteRecall, predictedRates, actualRates, aimMSE, overallAccuracy };
     });
 }
 
@@ -324,12 +358,16 @@ function countDiscreteOutcomes(predArr, actualArr, n, actionIdx) {
 // Model persistence (TF.js IndexedDB + our metadata)
 // ============================================================================
 
+const MAX_SESSION_HISTORY = 20;
+
 /**
- * Saves model weights to IndexedDB and config to metadata
+ * Saves model weights to IndexedDB and config to metadata.
+ * Optionally appends a training session entry for trend tracking.
  * @param {tf.Sequential} model
  * @param {object} config - The config used to create this model
  * @param {object} [stats] - Optional training stats to persist
  * @param {number} [stats.newFrames] - Frames trained in this session (added to cumulative total)
+ * @param {object} [stats.session] - Session summary to append { valLoss, accuracy, aimMSE, epochsRun }
  */
 async function saveModelWeights(model, config, stats) {
     await model.save(MODEL_IDB_KEY);
@@ -344,13 +382,27 @@ async function saveModelWeights(model, config, stats) {
         totalFramesTrained += stats.newFrames;
     }
 
+    // Append session entry for trend tracking (ring buffer, last N sessions)
+    let sessions = (existingMeta && existingMeta.sessions) ? [...existingMeta.sessions] : [];
+    if (stats && stats.session) {
+        sessions.push({
+            ts: Date.now(),
+            frames: stats.newFrames || 0,
+            ...stats.session
+        });
+        if (sessions.length > MAX_SESSION_HISTORY) {
+            sessions = sessions.slice(sessions.length - MAX_SESSION_HISTORY);
+        }
+    }
+
     await saveMetadata(CONFIG_META_KEY, {
         config,
         schemaVersion: SCHEMA_VERSION,
         savedAt: Date.now(),
-        totalFramesTrained
+        totalFramesTrained,
+        sessions
     });
-    console.log(`Model weights saved (total frames trained: ${totalFramesTrained})`);
+    console.log(`Model weights saved (total frames trained: ${totalFramesTrained}, sessions: ${sessions.length})`);
 }
 
 /**
@@ -393,6 +445,16 @@ async function getModelStats() {
         totalFramesTrained: meta.totalFramesTrained || 0,
         savedAt: meta.savedAt || 0
     };
+}
+
+/**
+ * Loads the session history array from metadata for trend display.
+ * @returns {Promise<Array<{ ts, frames, valLoss, accuracy, aimMSE, epochsRun }>>}
+ */
+async function getSessionHistory() {
+    const meta = await loadMetadata(CONFIG_META_KEY);
+    if (!meta || meta.schemaVersion !== SCHEMA_VERSION) return [];
+    return meta.sessions || [];
 }
 
 // ============================================================================
@@ -488,6 +550,23 @@ function base64ToArrayBuffer(base64) {
 // Cleanup helpers
 // ============================================================================
 
+/**
+ * Removes the trained model weights and config metadata from IndexedDB.
+ * Call this when starting a new run so stale weights don't carry over.
+ */
+async function clearModelWeights() {
+    try {
+        await tf.io.removeModel(MODEL_IDB_KEY);
+        console.log('Model weights removed from IndexedDB');
+    } catch (err) {
+        // Model may not exist yet — that's fine
+        console.log('No model weights to remove:', err.message);
+    }
+    // Clear the config / session metadata as well
+    await saveMetadata(CONFIG_META_KEY, null);
+    console.log('Model metadata cleared');
+}
+
 /** Disposes tensors in training data */
 function disposeTrainingData(data) {
     if (data.train) {
@@ -510,7 +589,9 @@ export {
     saveModelWeights,
     loadModelWeights,
     getModelStats,
+    getSessionHistory,
     exportModelAsJson,
     importModelFromJson,
+    clearModelWeights,
     disposeTrainingData
 };
